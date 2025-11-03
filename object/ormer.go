@@ -358,6 +358,11 @@ func (a *Ormer) createTable() {
 		panic(err)
 	}
 
+	err = a.Engine.Sync2(new(SloSession))
+	if err != nil {
+		panic(err)
+	}
+
 	err = a.Engine.Sync2(new(Token))
 	if err != nil {
 		panic(err)

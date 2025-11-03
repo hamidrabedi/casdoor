@@ -45,14 +45,45 @@ func codeToResponse(code *object.Code) *Response {
 		return &Response{Status: "error", Msg: code.Message, Data: code.Code}
 	}
 
-	return &Response{Status: "ok", Msg: "", Data: code.Code}
+	resp := &Response{Status: "ok", Msg: "", Data: code.Code}
+	if code.SessionState != "" || code.Sid != "" {
+		payload := map[string]string{}
+		if code.SessionState != "" {
+			payload["session_state"] = code.SessionState
+		}
+		if code.Sid != "" {
+			payload["sid"] = code.Sid
+		}
+		if code.ClientId != "" {
+			payload["client_id"] = code.ClientId
+		}
+		if code.RedirectUri != "" {
+			payload["redirect_uri"] = code.RedirectUri
+		}
+		resp.Data2 = payload
+	}
+	return resp
 }
 
 func tokenToResponse(token *object.Token) *Response {
 	if token.AccessToken == "" {
 		return &Response{Status: "error", Msg: "fail to get accessToken", Data: token.AccessToken}
 	}
-	return &Response{Status: "ok", Msg: "", Data: token.AccessToken, Data2: token.RefreshToken}
+	resp := &Response{Status: "ok", Msg: "", Data: token.AccessToken}
+	payload := map[string]string{}
+	if token.RefreshToken != "" {
+		payload["refresh_token"] = token.RefreshToken
+	}
+	if token.SessionState != "" {
+		payload["session_state"] = token.SessionState
+	}
+	if token.Sid != "" {
+		payload["sid"] = token.Sid
+	}
+	if len(payload) > 0 {
+		resp.Data2 = payload
+	}
+	return resp
 }
 
 // HandleLoggedIn ...
@@ -169,6 +200,18 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 			return
 		}
 
+		if code.TokenName != "" {
+			tokenId := util.GetId(code.TokenOwner, code.TokenName)
+			sloToken, tokenErr := object.GetToken(tokenId)
+			if tokenErr != nil {
+				util.LogWarning(c.Ctx, "Failed to load token for SLO session: %s", tokenErr.Error())
+			} else if sloToken != nil {
+				if _, err = object.AddOidcSloSession(application, user, sloToken, redirectUri, c.Ctx.Input.CruSession.SessionID()); err != nil {
+					util.LogWarning(c.Ctx, "Failed to register OIDC SLO session: %s", err.Error())
+				}
+			}
+		}
+
 		resp = codeToResponse(code)
 		resp.Data3 = user.NeedUpdatePassword
 		if application.EnableSigninSession || application.HasPromptPage() {
@@ -181,7 +224,13 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 		} else {
 			scope := c.Input().Get("scope")
 			nonce := c.Input().Get("nonce")
-			token, _ := object.GetTokenByUser(application, user, scope, nonce, c.Ctx.Request.Host)
+			redirectUri := c.Input().Get("redirectUri")
+			token, _ := object.GetTokenByUser(application, user, scope, nonce, c.Ctx.Request.Host, redirectUri)
+			if token != nil {
+				if _, err := object.AddOidcSloSession(application, user, token, redirectUri, c.Ctx.Input.CruSession.SessionID()); err != nil {
+					util.LogWarning(c.Ctx, "Failed to register OIDC SLO session: %s", err.Error())
+				}
+			}
 			resp = tokenToResponse(token)
 
 			resp.Data3 = user.NeedUpdatePassword

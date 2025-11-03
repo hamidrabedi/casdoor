@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
@@ -40,9 +41,38 @@ const (
 
 var DeviceAuthMap = sync.Map{}
 
+func generateSid() string {
+	return util.GenerateId()
+}
+
+func calculateSessionState(clientId, redirectUri, sid string) string {
+	if clientId == "" || redirectUri == "" || sid == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(redirectUri)
+	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	origin := fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+	salt := util.GenerateId()
+	input := fmt.Sprintf("%s %s %s %s", clientId, origin, sid, salt)
+	hash := sha256.Sum256([]byte(input))
+	return fmt.Sprintf("%x.%s", hash[:], salt)
+}
+
 type Code struct {
-	Message string `xorm:"varchar(100)" json:"message"`
-	Code    string `xorm:"varchar(100)" json:"code"`
+	Message          string `xorm:"varchar(100)" json:"message"`
+	Code             string `xorm:"varchar(100)" json:"code"`
+	Sid              string `json:"sid,omitempty"`
+	SessionState     string `json:"sessionState,omitempty"`
+	TokenName        string `json:"tokenName,omitempty"`
+	TokenOwner       string `json:"tokenOwner,omitempty"`
+	TokenApplication string `json:"tokenApplication,omitempty"`
+	TokenUser        string `json:"tokenUser,omitempty"`
+	RedirectUri      string `json:"redirectUri,omitempty"`
+	ClientId         string `json:"clientId,omitempty"`
 }
 
 type TokenWrapper struct {
@@ -52,6 +82,8 @@ type TokenWrapper struct {
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 	Scope        string `json:"scope"`
+	Sid          string `json:"sid,omitempty"`
+	SessionState string `json:"session_state,omitempty"`
 }
 
 type TokenError struct {
@@ -171,7 +203,9 @@ func GetOAuthCode(userId string, clientId string, provider string, signinMethod 
 	if err != nil {
 		return nil, err
 	}
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, scope, host)
+	sid := generateSid()
+	sessionState := calculateSessionState(application.ClientId, redirectUri, sid)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, scope, host, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +230,8 @@ func GetOAuthCode(userId string, clientId string, provider string, signinMethod 
 		CodeChallenge: challenge,
 		CodeIsUsed:    false,
 		CodeExpireIn:  time.Now().Add(time.Minute * 5).Unix(),
+		Sid:           sid,
+		SessionState:  sessionState,
 	}
 	_, err = AddToken(token)
 	if err != nil {
@@ -203,8 +239,16 @@ func GetOAuthCode(userId string, clientId string, provider string, signinMethod 
 	}
 
 	return &Code{
-		Message: "",
-		Code:    token.Code,
+		Message:          "",
+		Code:             token.Code,
+		Sid:              sid,
+		SessionState:     sessionState,
+		TokenName:        tokenName,
+		TokenOwner:       application.Owner,
+		TokenApplication: application.Name,
+		TokenUser:        user.Name,
+		RedirectUri:      redirectUri,
+		ClientId:         clientId,
 	}, nil
 }
 
@@ -281,6 +325,8 @@ func GetOAuthToken(grantType string, clientId string, clientSecret string, code 
 		TokenType:    token.TokenType,
 		ExpiresIn:    token.ExpiresIn,
 		Scope:        token.Scope,
+		Sid:          token.Sid,
+		SessionState: token.SessionState,
 	}
 
 	return tokenWrapper, nil
@@ -379,7 +425,7 @@ func RefreshToken(grantType string, refreshToken string, scope string, clientId 
 		return nil, err
 	}
 
-	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, host)
+	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, host, token.Sid)
 	if err != nil {
 		return &TokenError{
 			Error:            EndpointError,
@@ -400,11 +446,14 @@ func RefreshToken(grantType string, refreshToken string, scope string, clientId 
 		ExpiresIn:    application.ExpireInHours * hourSeconds,
 		Scope:        scope,
 		TokenType:    "Bearer",
+		Sid:          token.Sid,
+		SessionState: token.SessionState,
 	}
 	_, err = AddToken(newToken)
 	if err != nil {
 		return nil, err
 	}
+	_, _ = AddOidcSloSession(application, user, newToken, "", "")
 
 	_, err = DeleteToken(token)
 	if err != nil {
@@ -418,6 +467,8 @@ func RefreshToken(grantType string, refreshToken string, scope string, clientId 
 		TokenType:    newToken.TokenType,
 		ExpiresIn:    newToken.ExpiresIn,
 		Scope:        newToken.Scope,
+		Sid:          newToken.Sid,
+		SessionState: token.SessionState,
 	}
 	return tokenWrapper, nil
 }
@@ -565,7 +616,8 @@ func GetPasswordToken(application *Application, username string, password string
 		return nil, nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, host)
+	sid := generateSid()
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, host, sid)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -586,11 +638,13 @@ func GetPasswordToken(application *Application, username string, password string
 		Scope:        scope,
 		TokenType:    "Bearer",
 		CodeIsUsed:   true,
+		Sid:          sid,
 	}
 	_, err = AddToken(token)
 	if err != nil {
 		return nil, nil, err
 	}
+	_, _ = AddOidcSloSession(application, user, token, "", "")
 
 	return token, nil, nil
 }
@@ -611,7 +665,7 @@ func GetClientCredentialsToken(application *Application, clientSecret string, sc
 		Type:  "application",
 	}
 
-	accessToken, _, tokenName, err := generateJwtToken(application, nullUser, "", "", "", scope, host)
+	accessToken, _, tokenName, err := generateJwtToken(application, nullUser, "", "", "", scope, host, "")
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -660,7 +714,7 @@ func GetImplicitToken(application *Application, username string, scope string, n
 		}, nil
 	}
 
-	token, err := GetTokenByUser(application, user, scope, nonce, host)
+	token, err := GetTokenByUser(application, user, scope, nonce, host, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -669,13 +723,15 @@ func GetImplicitToken(application *Application, username string, scope string, n
 
 // GetTokenByUser
 // Implicit flow
-func GetTokenByUser(application *Application, user *User, scope string, nonce string, host string) (*Token, error) {
+func GetTokenByUser(application *Application, user *User, scope string, nonce string, host string, redirectUri string) (*Token, error) {
 	err := ExtendUserWithRolesAndPermissions(user)
 	if err != nil {
 		return nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", nonce, scope, host)
+	sid := generateSid()
+	sessionState := calculateSessionState(application.ClientId, redirectUri, sid)
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", nonce, scope, host, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -693,6 +749,8 @@ func GetTokenByUser(application *Application, user *User, scope string, nonce st
 		ExpiresIn:    application.ExpireInHours * hourSeconds,
 		Scope:        scope,
 		TokenType:    "Bearer",
+		Sid:          sid,
+		SessionState: sessionState,
 		CodeIsUsed:   true,
 	}
 	_, err = AddToken(token)
@@ -782,7 +840,8 @@ func GetWechatMiniProgramToken(application *Application, code string, host strin
 		return nil, nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", "", host)
+	sid := generateSid()
+	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", "", host, sid)
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -804,11 +863,13 @@ func GetWechatMiniProgramToken(application *Application, code string, host strin
 		Scope:        "",
 		TokenType:    "Bearer",
 		CodeIsUsed:   true,
+		Sid:          sid,
 	}
 	_, err = AddToken(token)
 	if err != nil {
 		return nil, nil, err
 	}
+	_, _ = AddOidcSloSession(application, user, token, "", "")
 	return token, nil, nil
 }
 
@@ -821,7 +882,7 @@ func GetAccessTokenByUser(user *User, host string) (string, error) {
 		return "", fmt.Errorf("the application for user %s is not found", user.Id)
 	}
 
-	token, err := GetTokenByUser(application, user, "profile", "", host)
+	token, err := GetTokenByUser(application, user, "profile", "", host, "")
 	if err != nil {
 		return "", err
 	}

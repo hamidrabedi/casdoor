@@ -45,6 +45,74 @@ type Response struct {
 	Data3  interface{} `json:"data3"`
 }
 
+func (c *ApiController) respondLogout(user string, redirectUri string, frontChannels []string) {
+	resp := &Response{Status: "ok", Msg: ""}
+	if user != "" {
+		resp.Data = user
+	}
+	if len(frontChannels) == 0 {
+		if redirectUri != "" {
+			resp.Data2 = redirectUri
+		}
+	} else {
+		payload := map[string]interface{}{"frontchannelLogoutUrls": frontChannels}
+		if redirectUri != "" {
+			payload["redirectUri"] = redirectUri
+		}
+		resp.Data2 = payload
+	}
+	c.Data["json"] = resp
+	c.ServeJSON()
+}
+
+func (c *ApiController) triggerOidcSlo(userId string) []string {
+	frontChannels := []string{}
+	if userId == "" {
+		return frontChannels
+	}
+
+	owner, name := util.GetOwnerAndNameFromId(userId)
+	if owner == "" || name == "" {
+		return frontChannels
+	}
+
+	sessions, err := object.GetSloSessionsByUser(owner, name)
+	if err != nil {
+		util.LogWarning(c.Ctx, "Failed to load SLO sessions: %s", err.Error())
+		return frontChannels
+	}
+
+	for _, slo := range sessions {
+		if slo.Type != object.SloTypeOidc {
+			continue
+		}
+		app, err := object.GetApplication(slo.Application)
+		if err != nil {
+			util.LogWarning(c.Ctx, "Failed to load application %s for logout: %s", slo.Application, err.Error())
+			continue
+		}
+		if app == nil {
+			continue
+		}
+
+		if err := object.SendBackchannelLogout(app, slo, c.Ctx.Request.Host); err != nil {
+			util.LogWarning(c.Ctx, "Backchannel logout failed for %s: %s", slo.Application, err.Error())
+		}
+
+		if url, err := object.BuildFrontchannelLogoutURL(app, slo, c.Ctx.Request.Host); err != nil {
+			util.LogWarning(c.Ctx, "Frontchannel logout URL build failed for %s: %s", slo.Application, err.Error())
+		} else if url != "" {
+			frontChannels = append(frontChannels, url)
+		}
+
+		if _, err := object.DeleteSloSession(slo.Owner, slo.Name, slo.Application, slo.Type, slo.SessionKey); err != nil {
+			util.LogWarning(c.Ctx, "Failed to cleanup SLO session %s: %s", slo.GetId(), err.Error())
+		}
+	}
+
+	return frontChannels
+}
+
 type Captcha struct {
 	Owner         string `json:"owner"`
 	Name          string `json:"name"`
@@ -337,7 +405,7 @@ func (c *ApiController) Logout() {
 	if accessToken == "" && redirectUri == "" {
 		// TODO https://github.com/casdoor/casdoor/pull/1494#discussion_r1095675265
 		if user == "" {
-			c.ResponseOk()
+			c.respondLogout("", "", nil)
 			return
 		}
 
@@ -353,11 +421,12 @@ func (c *ApiController) Logout() {
 		util.LogInfo(c.Ctx, "API: [%s] logged out", user)
 
 		application := c.GetSessionApplication()
+		frontChannels := c.triggerOidcSlo(user)
 		if application == nil || application.Name == "app-built-in" || application.HomepageUrl == "" {
-			c.ResponseOk(user)
+			c.respondLogout(user, "", frontChannels)
 			return
 		}
-		c.ResponseOk(user, application.HomepageUrl)
+		c.respondLogout(user, application.HomepageUrl, frontChannels)
 		return
 	} else {
 		// "post_logout_redirect_uri" has been made optional, see: https://github.com/casdoor/casdoor/issues/2151
@@ -402,7 +471,8 @@ func (c *ApiController) Logout() {
 		util.LogInfo(c.Ctx, "API: [%s] logged out", user)
 
 		if redirectUri == "" {
-			c.ResponseOk()
+			frontChannels := c.triggerOidcSlo(user)
+			c.respondLogout(user, "", frontChannels)
 			return
 		} else {
 			if application.IsRedirectUriValid(redirectUri) {
@@ -414,7 +484,12 @@ func (c *ApiController) Logout() {
 						redirectUrl = fmt.Sprintf("%s?state=%s", strings.TrimSuffix(redirectUri, "/"), state)
 					}
 				}
-				c.Ctx.Redirect(http.StatusFound, redirectUrl)
+				frontChannels := c.triggerOidcSlo(user)
+				if len(frontChannels) > 0 {
+					c.respondLogout(user, redirectUrl, frontChannels)
+				} else {
+					c.Ctx.Redirect(http.StatusFound, redirectUrl)
+				}
 			} else {
 				c.ResponseError(fmt.Sprintf(c.T("token:Redirect URI: %s doesn't exist in the allowed Redirect URI list"), redirectUri))
 				return

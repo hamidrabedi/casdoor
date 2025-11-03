@@ -109,32 +109,40 @@ type Application struct {
 	IsShared              bool            `json:"isShared"`
 	IpRestriction         string          `json:"ipRestriction"`
 
-	ClientId                string     `xorm:"varchar(100)" json:"clientId"`
-	ClientSecret            string     `xorm:"varchar(100)" json:"clientSecret"`
-	RedirectUris            []string   `xorm:"varchar(1000)" json:"redirectUris"`
-	ForcedRedirectOrigin    string     `xorm:"varchar(100)" json:"forcedRedirectOrigin"`
-	TokenFormat             string     `xorm:"varchar(100)" json:"tokenFormat"`
-	TokenSigningMethod      string     `xorm:"varchar(100)" json:"tokenSigningMethod"`
-	TokenFields             []string   `xorm:"varchar(1000)" json:"tokenFields"`
-	TokenAttributes         []*JwtItem `xorm:"mediumtext" json:"tokenAttributes"`
-	ExpireInHours           int        `json:"expireInHours"`
-	RefreshExpireInHours    int        `json:"refreshExpireInHours"`
-	SignupUrl               string     `xorm:"varchar(200)" json:"signupUrl"`
-	SigninUrl               string     `xorm:"varchar(200)" json:"signinUrl"`
-	ForgetUrl               string     `xorm:"varchar(200)" json:"forgetUrl"`
-	AffiliationUrl          string     `xorm:"varchar(100)" json:"affiliationUrl"`
-	IpWhitelist             string     `xorm:"varchar(200)" json:"ipWhitelist"`
-	TermsOfUse              string     `xorm:"varchar(100)" json:"termsOfUse"`
-	SignupHtml              string     `xorm:"mediumtext" json:"signupHtml"`
-	SigninHtml              string     `xorm:"mediumtext" json:"signinHtml"`
-	ThemeData               *ThemeData `xorm:"json" json:"themeData"`
-	FooterHtml              string     `xorm:"mediumtext" json:"footerHtml"`
-	FormCss                 string     `xorm:"text" json:"formCss"`
-	FormCssMobile           string     `xorm:"text" json:"formCssMobile"`
-	FormOffset              int        `json:"formOffset"`
-	FormSideHtml            string     `xorm:"mediumtext" json:"formSideHtml"`
-	FormBackgroundUrl       string     `xorm:"varchar(200)" json:"formBackgroundUrl"`
-	FormBackgroundUrlMobile string     `xorm:"varchar(200)" json:"formBackgroundUrlMobile"`
+	ClientId                          string     `xorm:"varchar(100)" json:"clientId"`
+	ClientSecret                      string     `xorm:"varchar(100)" json:"clientSecret"`
+	RedirectUris                      []string   `xorm:"varchar(1000)" json:"redirectUris"`
+	ForcedRedirectOrigin              string     `xorm:"varchar(100)" json:"forcedRedirectOrigin"`
+	TokenFormat                       string     `xorm:"varchar(100)" json:"tokenFormat"`
+	TokenSigningMethod                string     `xorm:"varchar(100)" json:"tokenSigningMethod"`
+	TokenFields                       []string   `xorm:"varchar(1000)" json:"tokenFields"`
+	TokenAttributes                   []*JwtItem `xorm:"mediumtext" json:"tokenAttributes"`
+	ExpireInHours                     int        `json:"expireInHours"`
+	RefreshExpireInHours              int        `json:"refreshExpireInHours"`
+	SignupUrl                         string     `xorm:"varchar(200)" json:"signupUrl"`
+	SigninUrl                         string     `xorm:"varchar(200)" json:"signinUrl"`
+	LogoutUrl                         string     `xorm:"varchar(500)" json:"logoutUrl"`
+	FrontChannelLogoutUri             string     `xorm:"varchar(500)" json:"frontChannelLogoutUri"`
+	FrontChannelLogoutSessionRequired bool       `json:"frontChannelLogoutSessionRequired"`
+	BackChannelLogoutUri              string     `xorm:"varchar(500)" json:"backChannelLogoutUri"`
+	BackChannelLogoutSessionRequired  bool       `json:"backChannelLogoutSessionRequired"`
+	SamlSingleLogoutServiceUrl        string     `xorm:"varchar(500)" json:"samlSingleLogoutServiceUrl"`
+	SamlSingleLogoutServiceBinding    string     `xorm:"varchar(100)" json:"samlSingleLogoutServiceBinding"`
+	CasSingleLogoutCallbackUrl        string     `xorm:"varchar(500)" json:"casSingleLogoutCallbackUrl"`
+	ForgetUrl                         string     `xorm:"varchar(200)" json:"forgetUrl"`
+	AffiliationUrl                    string     `xorm:"varchar(100)" json:"affiliationUrl"`
+	IpWhitelist                       string     `xorm:"varchar(200)" json:"ipWhitelist"`
+	TermsOfUse                        string     `xorm:"varchar(100)" json:"termsOfUse"`
+	SignupHtml                        string     `xorm:"mediumtext" json:"signupHtml"`
+	SigninHtml                        string     `xorm:"mediumtext" json:"signinHtml"`
+	ThemeData                         *ThemeData `xorm:"json" json:"themeData"`
+	FooterHtml                        string     `xorm:"mediumtext" json:"footerHtml"`
+	FormCss                           string     `xorm:"text" json:"formCss"`
+	FormCssMobile                     string     `xorm:"text" json:"formCssMobile"`
+	FormOffset                        int        `json:"formOffset"`
+	FormSideHtml                      string     `xorm:"mediumtext" json:"formSideHtml"`
+	FormBackgroundUrl                 string     `xorm:"varchar(200)" json:"formBackgroundUrl"`
+	FormBackgroundUrlMobile           string     `xorm:"varchar(200)" json:"formBackgroundUrlMobile"`
 
 	FailedSigninLimit      int `json:"failedSigninLimit"`
 	FailedSigninFrozenTime int `json:"failedSigninFrozenTime"`
@@ -560,6 +568,14 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 	application.EnableWebAuthn = false
 	application.EnableLinkWithEmail = false
 	application.SamlReplyUrl = "***"
+	application.LogoutUrl = "***"
+	application.FrontChannelLogoutUri = "***"
+	application.BackChannelLogoutUri = "***"
+	application.SamlSingleLogoutServiceUrl = "***"
+	application.CasSingleLogoutCallbackUrl = "***"
+	application.FrontChannelLogoutSessionRequired = false
+	application.BackChannelLogoutSessionRequired = false
+	application.SamlSingleLogoutServiceBinding = ""
 
 	providerItems := []*ProviderItem{}
 	for _, providerItem := range application.Providers {

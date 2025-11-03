@@ -31,6 +31,7 @@ type Claims struct {
 	Nonce     string `json:"nonce,omitempty"`
 	Tag       string `json:"tag"`
 	Scope     string `json:"scope,omitempty"`
+	Sid       string `json:"sid,omitempty"`
 	// the `azp` (Authorized Party) claim. Optional. See https://openid.net/specs/openid-connect-core-1_0.html#IDToken
 	Azp      string `json:"azp,omitempty"`
 	Provider string `json:"provider,omitempty"`
@@ -158,6 +159,7 @@ type ClaimsShort struct {
 	Scope     string `json:"scope,omitempty"`
 	Azp       string `json:"azp,omitempty"`
 	Provider  string `json:"provider,omitempty"`
+	Sid       string `json:"sid,omitempty"`
 
 	SigninMethod string `json:"signinMethod,omitempty"`
 	jwt.RegisteredClaims
@@ -180,6 +182,7 @@ type ClaimsWithoutThirdIdp struct {
 	Scope     string `json:"scope,omitempty"`
 	Azp       string `json:"azp,omitempty"`
 	Provider  string `json:"provider,omitempty"`
+	Sid       string `json:"sid,omitempty"`
 
 	SigninMethod string `json:"signinMethod,omitempty"`
 	jwt.RegisteredClaims
@@ -315,6 +318,7 @@ func getShortClaims(claims Claims) ClaimsShort {
 		Azp:              claims.Azp,
 		SigninMethod:     claims.SigninMethod,
 		Provider:         claims.Provider,
+		Sid:              claims.Sid,
 	}
 	return res
 }
@@ -330,6 +334,7 @@ func getClaimsWithoutThirdIdp(claims Claims) ClaimsWithoutThirdIdp {
 		Azp:                 claims.Azp,
 		SigninMethod:        claims.SigninMethod,
 		Provider:            claims.Provider,
+		Sid:                 claims.Sid,
 	}
 	return res
 }
@@ -353,6 +358,9 @@ func getClaimsCustom(claims Claims, tokenField []string, tokenAttributes []*JwtI
 	res["azp"] = claims.Azp
 	res["signinMethod"] = claims.SigninMethod
 	res["provider"] = claims.Provider
+	if claims.Sid != "" {
+		res["sid"] = claims.Sid
+	}
 
 	for _, field := range tokenField {
 		if strings.HasPrefix(field, "Properties.") {
@@ -424,7 +432,7 @@ func refineUser(user *User) *User {
 	return user
 }
 
-func generateJwtToken(application *Application, user *User, provider string, signinMethod string, nonce string, scope string, host string) (string, string, string, error) {
+func generateJwtToken(application *Application, user *User, provider string, signinMethod string, nonce string, scope string, host string, sid string) (string, string, string, error) {
 	nowTime := time.Now()
 	expireTime := nowTime.Add(time.Duration(application.ExpireInHours) * time.Hour)
 	refreshExpireTime := nowTime.Add(time.Duration(application.RefreshExpireInHours) * time.Hour)
@@ -467,6 +475,7 @@ func generateJwtToken(application *Application, user *User, provider string, sig
 			ID:        jti,
 		},
 	}
+	claims.Sid = sid
 
 	if application.IsShared {
 		claims.Audience = []string{application.ClientId + "-org-" + user.Owner}
