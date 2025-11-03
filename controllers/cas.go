@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/casdoor/casdoor/object"
+	"github.com/casdoor/casdoor/util"
 )
 
 const (
@@ -278,4 +279,62 @@ func (c *RootController) sendCasAuthenticationResponseErr(code, msg, format stri
 		c.Data["xml"] = serviceResponse
 		c.ServeXML()
 	}
+}
+
+// CasLogout handles CAS Single Sign-Out (SLO)
+// @Title CasLogout
+// @Tag CAS API
+// @Description CAS logout endpoint
+// @Param service query string false "Service URL to redirect after logout"
+// @Success 200 {string} string "Logout successful"
+// @router /cas/:organization/:application/logout [get,post]
+func (c *RootController) CasLogout() {
+	organization := c.Ctx.Input.Param(":organization")
+	applicationName := c.Ctx.Input.Param(":application")
+	service := c.Input().Get("service")
+
+	// Get application
+	application, err := object.GetApplication(fmt.Sprintf("%s/%s", organization, applicationName))
+	if err != nil {
+		c.ResponseError(err.Error())
+		return
+	}
+
+	if application == nil {
+		c.ResponseError(fmt.Sprintf("Application %s/%s not found", organization, applicationName))
+		return
+	}
+
+	// Get current session
+	userId := c.GetSessionUsername()
+	if userId != "" {
+		// Clear the session
+		c.ClearUserSession()
+		c.ClearTokenSession()
+		
+		owner, username := util.GetOwnerAndNameFromId(userId)
+		sessionId := util.GetSessionId(owner, username, object.CasdoorApplication)
+		_, err := object.DeleteSessionId(sessionId, c.Ctx.Input.CruSession.SessionID())
+		if err != nil {
+			c.ResponseError(err.Error())
+			return
+		}
+
+		util.LogInfo(c.Ctx, "CAS: [%s] logged out", userId)
+	}
+
+	// If service parameter is provided, validate and redirect
+	if service != "" {
+		// Validate service URL against allowed redirect URIs
+		if application.IsRedirectUriValid(service) {
+			c.Redirect(service, http.StatusSeeOther)
+			return
+		} else {
+			c.ResponseError(fmt.Sprintf("Service URL: %s is not in the allowed redirect URI list", service))
+			return
+		}
+	}
+
+	// Return success message
+	c.Ctx.Output.Body([]byte("Logout successful"))
 }

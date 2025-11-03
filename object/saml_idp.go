@@ -194,12 +194,13 @@ type KeyDescriptor struct {
 }
 
 type IdpSSODescriptor struct {
-	XMLName                    xml.Name `xml:"urn:oasis:names:tc:SAML:2.0:metadata IDPSSODescriptor"`
-	ProtocolSupportEnumeration string   `xml:"protocolSupportEnumeration,attr"`
+	XMLName                    xml.Name              `xml:"urn:oasis:names:tc:SAML:2.0:metadata IDPSSODescriptor"`
+	ProtocolSupportEnumeration string                `xml:"protocolSupportEnumeration,attr"`
 	SigningKeyDescriptor       KeyDescriptor
-	NameIDFormats              []NameIDFormat      `xml:"NameIDFormat"`
-	SingleSignOnService        SingleSignOnService `xml:"SingleSignOnService"`
-	Attribute                  []Attribute         `xml:"Attribute"`
+	NameIDFormats              []NameIDFormat        `xml:"NameIDFormat"`
+	SingleSignOnService        SingleSignOnService   `xml:"SingleSignOnService"`
+	SingleLogoutService        []SingleLogoutService `xml:"SingleLogoutService"`
+	Attribute                  []Attribute           `xml:"Attribute"`
 }
 
 type NameIDFormat struct {
@@ -209,6 +210,11 @@ type NameIDFormat struct {
 
 type SingleSignOnService struct {
 	// XMLName  xml.Name
+	Binding  string `xml:"Binding,attr"`
+	Location string `xml:"Location,attr"`
+}
+
+type SingleLogoutService struct {
 	Binding  string `xml:"Binding,attr"`
 	Location string `xml:"Location,attr"`
 }
@@ -251,6 +257,19 @@ func GetSamlMeta(application *Application, host string, enablePostBinding bool) 
 		idpBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
 	}
 
+	// Single Logout Service endpoints
+	sloLocation := fmt.Sprintf("%s/api/saml/logout/%s/%s", originBackend, application.Owner, application.Name)
+	singleLogoutServices := []SingleLogoutService{
+		{
+			Binding:  "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+			Location: sloLocation,
+		},
+		{
+			Binding:  "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
+			Location: sloLocation,
+		},
+	}
+
 	d := IdpEntityDescriptor{
 		XMLName: xml.Name{
 			Local: "md:EntityDescriptor",
@@ -284,6 +303,7 @@ func GetSamlMeta(application *Application, host string, enablePostBinding bool) 
 				Binding:  idpBinding,
 				Location: idpLocation,
 			},
+			SingleLogoutService:        singleLogoutServices,
 			ProtocolSupportEnumeration: "urn:oasis:names:tc:SAML:2.0:protocol",
 		},
 	}
@@ -542,4 +562,234 @@ func GetSamlRedirectAddress(owner string, application string, relayState string,
 		baseURL += fmt.Sprintf("&login_hint=%s", url.QueryEscape(loginHint))
 	}
 	return baseURL
+}
+
+// NewSamlLogoutRequest generates a SAML 2.0 LogoutRequest
+func NewSamlLogoutRequest(application *Application, user *User, host string, sessionIndex string) (*etree.Element, error) {
+	logoutRequest := &etree.Element{
+		Space: "samlp",
+		Tag:   "LogoutRequest",
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	logoutRequest.CreateAttr("xmlns:samlp", "urn:oasis:names:tc:SAML:2.0:protocol")
+	logoutRequest.CreateAttr("xmlns:saml", "urn:oasis:names:tc:SAML:2.0:assertion")
+	
+	lrId := uuid.New()
+	logoutRequest.CreateAttr("ID", fmt.Sprintf("_%s", lrId))
+	logoutRequest.CreateAttr("Version", "2.0")
+	logoutRequest.CreateAttr("IssueInstant", now)
+	
+	_, originBackend := getOriginFromHost(host)
+	logoutRequest.CreateElement("saml:Issuer").SetText(originBackend)
+	
+	// Add NameID
+	nameIDValue := user.Name
+	if application.UseEmailAsSamlNameId {
+		nameIDValue = user.Email
+	}
+	nameId := logoutRequest.CreateElement("saml:NameID")
+	if application.UseEmailAsSamlNameId {
+		nameId.CreateAttr("Format", "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress")
+	} else {
+		nameId.CreateAttr("Format", "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified")
+	}
+	nameId.SetText(nameIDValue)
+	
+	// Add SessionIndex if provided
+	if sessionIndex != "" {
+		logoutRequest.CreateElement("samlp:SessionIndex").SetText(sessionIndex)
+	}
+	
+	return logoutRequest, nil
+}
+
+// NewSamlLogoutResponse generates a SAML 2.0 LogoutResponse
+func NewSamlLogoutResponse(application *Application, host string, inResponseTo string, statusCode string) (*etree.Element, error) {
+	logoutResponse := &etree.Element{
+		Space: "samlp",
+		Tag:   "LogoutResponse",
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	logoutResponse.CreateAttr("xmlns:samlp", "urn:oasis:names:tc:SAML:2.0:protocol")
+	logoutResponse.CreateAttr("xmlns:saml", "urn:oasis:names:tc:SAML:2.0:assertion")
+	
+	lrId := uuid.New()
+	logoutResponse.CreateAttr("ID", fmt.Sprintf("_%s", lrId))
+	logoutResponse.CreateAttr("Version", "2.0")
+	logoutResponse.CreateAttr("IssueInstant", now)
+	
+	if inResponseTo != "" {
+		logoutResponse.CreateAttr("InResponseTo", inResponseTo)
+	}
+	
+	_, originBackend := getOriginFromHost(host)
+	logoutResponse.CreateElement("saml:Issuer").SetText(originBackend)
+	
+	// Set status - default to Success
+	if statusCode == "" {
+		statusCode = "urn:oasis:names:tc:SAML:2.0:status:Success"
+	}
+	logoutResponse.CreateElement("samlp:Status").CreateElement("samlp:StatusCode").CreateAttr("Value", statusCode)
+	
+	return logoutResponse, nil
+}
+
+// GetSamlLogoutRequest generates and signs a SAML LogoutRequest
+func GetSamlLogoutRequest(application *Application, user *User, host string, sessionIndex string) (string, string, error) {
+	cert, err := getCertByApplication(application)
+	if err != nil {
+		return "", "", err
+	}
+
+	if cert == nil || cert.Certificate == "" {
+		return "", "", fmt.Errorf("certificate is required for SAML logout")
+	}
+
+	block, _ := pem.Decode([]byte(cert.Certificate))
+	certificate := base64.StdEncoding.EncodeToString(block.Bytes)
+
+	logoutRequest, err := NewSamlLogoutRequest(application, user, host, sessionIndex)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create SAML logout request: %s", err.Error())
+	}
+
+	randomKeyStore := &X509Key{
+		PrivateKey:      cert.PrivateKey,
+		X509Certificate: certificate,
+	}
+	ctx := dsig.NewDefaultSigningContext(randomKeyStore)
+	if application.SamlHashAlgorithm == "" || application.SamlHashAlgorithm == "SHA1" {
+		ctx.Hash = crypto.SHA1
+	} else if application.SamlHashAlgorithm == "SHA256" {
+		ctx.Hash = crypto.SHA256
+	} else if application.SamlHashAlgorithm == "SHA512" {
+		ctx.Hash = crypto.SHA512
+	}
+
+	if application.EnableSamlC14n10 {
+		ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
+	}
+
+	// Sign the logout request
+	sig, err := ctx.ConstructSignature(logoutRequest, true)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to sign SAML logout request: %s", err.Error())
+	}
+
+	logoutRequest.InsertChildAt(1, sig)
+
+	doc := etree.NewDocument()
+	doc.SetRoot(logoutRequest)
+	xmlBytes, err := doc.WriteToBytes()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to serialize SAML logout request: %s", err.Error())
+	}
+
+	// Compress and encode
+	if application.EnableSamlCompress {
+		flated := bytes.NewBuffer(nil)
+		writer, err := flate.NewWriter(flated, flate.DefaultCompression)
+		if err != nil {
+			return "", "", err
+		}
+
+		_, err = writer.Write(xmlBytes)
+		if err != nil {
+			return "", "", err
+		}
+
+		err = writer.Close()
+		if err != nil {
+			return "", "", err
+		}
+
+		xmlBytes = flated.Bytes()
+	}
+
+	encodedRequest := base64.StdEncoding.EncodeToString(xmlBytes)
+	
+	// Determine destination URL - use first redirect URI as logout endpoint
+	destination := ""
+	if len(application.RedirectUris) > 0 {
+		destination = application.RedirectUris[0]
+	}
+	
+	return encodedRequest, destination, nil
+}
+
+// GetSamlLogoutResponse generates and signs a SAML LogoutResponse
+func GetSamlLogoutResponse(application *Application, host string, inResponseTo string, destination string) (string, string, error) {
+	cert, err := getCertByApplication(application)
+	if err != nil {
+		return "", "", err
+	}
+
+	if cert == nil || cert.Certificate == "" {
+		return "", "", fmt.Errorf("certificate is required for SAML logout")
+	}
+
+	block, _ := pem.Decode([]byte(cert.Certificate))
+	certificate := base64.StdEncoding.EncodeToString(block.Bytes)
+
+	logoutResponse, err := NewSamlLogoutResponse(application, host, inResponseTo, "")
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create SAML logout response: %s", err.Error())
+	}
+
+	randomKeyStore := &X509Key{
+		PrivateKey:      cert.PrivateKey,
+		X509Certificate: certificate,
+	}
+	ctx := dsig.NewDefaultSigningContext(randomKeyStore)
+	if application.SamlHashAlgorithm == "" || application.SamlHashAlgorithm == "SHA1" {
+		ctx.Hash = crypto.SHA1
+	} else if application.SamlHashAlgorithm == "SHA256" {
+		ctx.Hash = crypto.SHA256
+	} else if application.SamlHashAlgorithm == "SHA512" {
+		ctx.Hash = crypto.SHA512
+	}
+
+	if application.EnableSamlC14n10 {
+		ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
+	}
+
+	// Sign the logout response
+	sig, err := ctx.ConstructSignature(logoutResponse, true)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to sign SAML logout response: %s", err.Error())
+	}
+
+	logoutResponse.InsertChildAt(1, sig)
+
+	doc := etree.NewDocument()
+	doc.SetRoot(logoutResponse)
+	xmlBytes, err := doc.WriteToBytes()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to serialize SAML logout response: %s", err.Error())
+	}
+
+	// Compress and encode
+	if application.EnableSamlCompress {
+		flated := bytes.NewBuffer(nil)
+		writer, err := flate.NewWriter(flated, flate.DefaultCompression)
+		if err != nil {
+			return "", "", err
+		}
+
+		_, err = writer.Write(xmlBytes)
+		if err != nil {
+			return "", "", err
+		}
+
+		err = writer.Close()
+		if err != nil {
+			return "", "", err
+		}
+
+		xmlBytes = flated.Bytes()
+	}
+
+	encodedResponse := base64.StdEncoding.EncodeToString(xmlBytes)
+	
+	return encodedResponse, destination, nil
 }

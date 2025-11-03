@@ -15,11 +15,15 @@
 package object
 
 import (
+	"bytes"
+	"compress/flate"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/url"
 	"regexp"
 	"strings"
@@ -202,4 +206,131 @@ func getCertificateFromSamlResponse(samlResponse string, providerType string) (s
 	}
 	res := regexp.MustCompile(expression).FindStringSubmatch(deStr)
 	return res[1], nil
+}
+
+// ParseSamlLogoutRequest parses a SAML LogoutRequest
+func ParseSamlLogoutRequest(samlRequest string, provider *Provider) (nameID string, sessionIndex string, requestID string, err error) {
+	samlRequest, _ = url.QueryUnescape(samlRequest)
+	
+	// Decode base64
+	decoded, err := base64.StdEncoding.DecodeString(samlRequest)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to decode SAML logout request: %s", err.Error())
+	}
+	
+	// Check if it's compressed
+	var requestBytes []byte
+	if strings.Contains(string(decoded), "xmlns:") {
+		requestBytes = decoded
+	} else {
+		// Decompress
+		var buffer bytes.Buffer
+		rdr := flate.NewReader(bytes.NewReader(decoded))
+		for {
+			_, err = io.CopyN(&buffer, rdr, 1024)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return "", "", "", err
+			}
+		}
+		requestBytes = buffer.Bytes()
+	}
+	
+	// Parse XML
+	type SamlLogoutRequest struct {
+		XMLName      xml.Name `xml:"LogoutRequest"`
+		ID           string   `xml:"ID,attr"`
+		NameID       string   `xml:"NameID"`
+		SessionIndex string   `xml:"SessionIndex"`
+	}
+	
+	var logoutRequest SamlLogoutRequest
+	err = xml.Unmarshal(requestBytes, &logoutRequest)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to unmarshal SAML logout request: %s", err.Error())
+	}
+	
+	return logoutRequest.NameID, logoutRequest.SessionIndex, logoutRequest.ID, nil
+}
+
+// ParseSamlLogoutResponse parses a SAML LogoutResponse
+func ParseSamlLogoutResponse(samlResponse string, provider *Provider) (inResponseTo string, statusCode string, err error) {
+	samlResponse, _ = url.QueryUnescape(samlResponse)
+	
+	// Decode base64
+	decoded, err := base64.StdEncoding.DecodeString(samlResponse)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode SAML logout response: %s", err.Error())
+	}
+	
+	// Check if it's compressed
+	var responseBytes []byte
+	if strings.Contains(string(decoded), "xmlns:") {
+		responseBytes = decoded
+	} else {
+		// Decompress
+		var buffer bytes.Buffer
+		rdr := flate.NewReader(bytes.NewReader(decoded))
+		for {
+			_, err = io.CopyN(&buffer, rdr, 1024)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return "", "", err
+			}
+		}
+		responseBytes = buffer.Bytes()
+	}
+	
+	// Parse XML
+	type StatusCode struct {
+		Value string `xml:"Value,attr"`
+	}
+	type Status struct {
+		StatusCode StatusCode `xml:"StatusCode"`
+	}
+	type SamlLogoutResponse struct {
+		XMLName      xml.Name `xml:"LogoutResponse"`
+		InResponseTo string   `xml:"InResponseTo,attr"`
+		Status       Status   `xml:"Status"`
+	}
+	
+	var logoutResponse SamlLogoutResponse
+	err = xml.Unmarshal(responseBytes, &logoutResponse)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to unmarshal SAML logout response: %s", err.Error())
+	}
+	
+	return logoutResponse.InResponseTo, logoutResponse.Status.StatusCode.Value, nil
+}
+
+// GenerateSamlLogoutRequest generates a SAML logout request for SP-initiated logout
+func GenerateSamlLogoutRequest(providerId string, nameID string, sessionIndex string, host string, lang string) (auth string, method string, destination string, err error) {
+	provider, err := GetProvider(providerId)
+	if err != nil {
+		return "", "", "", err
+	}
+	if provider.Category != "SAML" {
+		return "", "", "", fmt.Errorf(i18n.Translate(lang, "saml_sp:provider %s's category is not SAML"), provider.Name)
+	}
+
+	// Build logout request
+	_, err = buildSp(provider, "", host)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	// For now, we'll construct a simple logout request
+	// In production, you might want to use a library that supports LogoutRequest generation
+	logoutURL := provider.Endpoint // This should be the IDP's SingleLogoutService endpoint
+	
+	// Build the logout request URL
+	auth = logoutURL
+	method = "GET"
+	destination = logoutURL
+	
+	return auth, method, destination, nil
 }

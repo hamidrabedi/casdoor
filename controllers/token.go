@@ -478,3 +478,120 @@ func (c *ApiController) IntrospectToken() {
 	c.Data["json"] = introspectionResponse
 	c.ServeJSON()
 }
+
+// RevokeToken
+// @Title RevokeToken
+// @Tag Token API
+// @Description Revoke an OAuth 2.0 token (RFC 7009)
+// @Param token formData string true "The token to be revoked (access_token or refresh_token)"
+// @Param token_type_hint formData string false "Hint about the type of token (access_token or refresh_token)"
+// @Param client_id formData string false "Client ID (if not using Basic Auth)"
+// @Param client_secret formData string false "Client Secret (if not using Basic Auth)"
+// @Success 200 {string} string "Token revoked successfully"
+// @Failure 400 {object} object.TokenError The Response object
+// @Failure 401 {object} object.TokenError The Response object
+// @router /login/oauth/revoke [post]
+func (c *ApiController) RevokeToken() {
+	tokenValue := c.Input().Get("token")
+	tokenTypeHint := c.Input().Get("token_type_hint")
+	
+	if tokenValue == "" {
+		c.ResponseTokenError(object.InvalidRequest)
+		return
+	}
+
+	// Get client credentials from Basic Auth or form parameters
+	clientId, clientSecret, ok := c.Ctx.Request.BasicAuth()
+	if !ok {
+		clientId = c.Input().Get("client_id")
+		clientSecret = c.Input().Get("client_secret")
+		if clientId == "" || clientSecret == "" {
+			c.ResponseTokenError(object.InvalidRequest)
+			return
+		}
+	}
+
+	// Verify client credentials
+	application, err := object.GetApplicationByClientId(clientId)
+	if err != nil {
+		c.ResponseTokenError(err.Error())
+		return
+	}
+
+	if application == nil || application.ClientSecret != clientSecret {
+		c.ResponseTokenError(object.InvalidClient)
+		return
+	}
+
+	// Find the token to revoke
+	var token *object.Token
+	if tokenTypeHint != "" {
+		token, err = object.GetTokenByTokenValue(tokenValue, tokenTypeHint)
+		if err != nil {
+			// Per RFC 7009, we should still return success even if token is not found
+			c.Ctx.Output.SetStatus(200)
+			c.Data["json"] = map[string]string{}
+			c.ServeJSON()
+			return
+		}
+	} else {
+		// Try both access_token and refresh_token
+		token, err = object.GetTokenByAccessToken(tokenValue)
+		if err != nil {
+			c.ResponseTokenError(err.Error())
+			return
+		}
+		if token == nil {
+			token, err = object.GetTokenByRefreshToken(tokenValue)
+			if err != nil {
+				c.ResponseTokenError(err.Error())
+				return
+			}
+		}
+	}
+
+	if token == nil {
+		// Per RFC 7009, we should still return success even if token is not found
+		c.Ctx.Output.SetStatus(200)
+		c.Data["json"] = map[string]string{}
+		c.ServeJSON()
+		return
+	}
+
+	// Verify the token belongs to the requesting client
+	if token.Application != application.Name {
+		c.ResponseTokenError(object.InvalidClient)
+		return
+	}
+
+	// Revoke the token by setting ExpiresIn to 0
+	token.ExpiresIn = 0
+	_, err = object.UpdateToken(token.GetId(), token, false)
+	if err != nil {
+		c.ResponseTokenError(err.Error())
+		return
+	}
+
+	// Also clear any sessions associated with this token
+	userId := util.GetId(token.Organization, token.User)
+	user, err := object.GetUser(userId)
+	if err == nil && user != nil {
+		owner, username := util.GetOwnerAndNameFromId(userId)
+		sessions, err := object.GetUserAppSessions(owner, username, token.Application)
+		if err == nil {
+			for _, session := range sessions {
+				for _, sid := range session.SessionId {
+					object.DeleteBeegoSession([]string{sid})
+				}
+				object.DeleteSession(session.GetId())
+			}
+		}
+	}
+
+	util.LogInfo(c.Ctx, "Token revoked: %s for application: %s", token.Name, token.Application)
+
+	// Return success (200 OK with empty body per RFC 7009)
+	c.Ctx.Output.SetStatus(200)
+	c.Data["json"] = map[string]string{}
+	c.ServeJSON()
+}

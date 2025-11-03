@@ -27,23 +27,30 @@ import (
 )
 
 type OidcDiscovery struct {
-	Issuer                                 string   `json:"issuer"`
-	AuthorizationEndpoint                  string   `json:"authorization_endpoint"`
-	TokenEndpoint                          string   `json:"token_endpoint"`
-	UserinfoEndpoint                       string   `json:"userinfo_endpoint"`
-	DeviceAuthorizationEndpoint            string   `json:"device_authorization_endpoint"`
-	JwksUri                                string   `json:"jwks_uri"`
-	IntrospectionEndpoint                  string   `json:"introspection_endpoint"`
-	ResponseTypesSupported                 []string `json:"response_types_supported"`
-	ResponseModesSupported                 []string `json:"response_modes_supported"`
-	GrantTypesSupported                    []string `json:"grant_types_supported"`
-	SubjectTypesSupported                  []string `json:"subject_types_supported"`
-	IdTokenSigningAlgValuesSupported       []string `json:"id_token_signing_alg_values_supported"`
-	ScopesSupported                        []string `json:"scopes_supported"`
-	ClaimsSupported                        []string `json:"claims_supported"`
-	RequestParameterSupported              bool     `json:"request_parameter_supported"`
-	RequestObjectSigningAlgValuesSupported []string `json:"request_object_signing_alg_values_supported"`
-	EndSessionEndpoint                     string   `json:"end_session_endpoint"`
+	Issuer                                      string   `json:"issuer"`
+	AuthorizationEndpoint                       string   `json:"authorization_endpoint"`
+	TokenEndpoint                               string   `json:"token_endpoint"`
+	UserinfoEndpoint                            string   `json:"userinfo_endpoint"`
+	DeviceAuthorizationEndpoint                 string   `json:"device_authorization_endpoint"`
+	JwksUri                                     string   `json:"jwks_uri"`
+	IntrospectionEndpoint                       string   `json:"introspection_endpoint"`
+	RevocationEndpoint                          string   `json:"revocation_endpoint"`
+	ResponseTypesSupported                      []string `json:"response_types_supported"`
+	ResponseModesSupported                      []string `json:"response_modes_supported"`
+	GrantTypesSupported                         []string `json:"grant_types_supported"`
+	SubjectTypesSupported                       []string `json:"subject_types_supported"`
+	IdTokenSigningAlgValuesSupported            []string `json:"id_token_signing_alg_values_supported"`
+	ScopesSupported                             []string `json:"scopes_supported"`
+	ClaimsSupported                             []string `json:"claims_supported"`
+	RequestParameterSupported                   bool     `json:"request_parameter_supported"`
+	RequestObjectSigningAlgValuesSupported      []string `json:"request_object_signing_alg_values_supported"`
+	EndSessionEndpoint                          string   `json:"end_session_endpoint"`
+	BackchannelLogoutSupported                  bool     `json:"backchannel_logout_supported"`
+	BackchannelLogoutSessionSupported           bool     `json:"backchannel_logout_session_supported"`
+	FrontchannelLogoutSupported                 bool     `json:"frontchannel_logout_supported"`
+	FrontchannelLogoutSessionSupported          bool     `json:"frontchannel_logout_session_supported"`
+	RevocationEndpointAuthMethodsSupported      []string `json:"revocation_endpoint_auth_methods_supported"`
+	TokenEndpointAuthMethodsSupported           []string `json:"token_endpoint_auth_methods_supported"`
 }
 
 type WebFinger struct {
@@ -131,23 +138,30 @@ func GetOidcDiscovery(host string, applicationName string) OidcDiscovery {
 	// https://accounts.google.com/.well-known/openid-configuration
 	// https://access.line.me/.well-known/openid-configuration
 	oidcDiscovery := OidcDiscovery{
-		Issuer:                                 issuer,
-		AuthorizationEndpoint:                  authzEndpoint,
-		TokenEndpoint:                          fmt.Sprintf("%s/api/login/oauth/access_token", originBackend),
-		UserinfoEndpoint:                       fmt.Sprintf("%s/api/userinfo", originBackend),
-		DeviceAuthorizationEndpoint:            fmt.Sprintf("%s/api/device-auth", originBackend),
-		JwksUri:                                jwksUri,
-		IntrospectionEndpoint:                  fmt.Sprintf("%s/api/login/oauth/introspect", originBackend),
-		ResponseTypesSupported:                 []string{"code", "token", "id_token", "code token", "code id_token", "token id_token", "code token id_token", "none"},
-		ResponseModesSupported:                 []string{"query", "fragment", "form_post"},
-		GrantTypesSupported:                    []string{"password", "authorization_code"},
-		SubjectTypesSupported:                  []string{"public"},
-		IdTokenSigningAlgValuesSupported:       []string{"RS256", "RS512", "ES256", "ES384", "ES512"},
-		ScopesSupported:                        []string{"openid", "email", "profile", "address", "phone", "offline_access"},
-		ClaimsSupported:                        []string{"iss", "ver", "sub", "aud", "iat", "exp", "id", "type", "displayName", "avatar", "permanentAvatar", "email", "phone", "location", "affiliation", "title", "homepage", "bio", "tag", "region", "language", "score", "ranking", "isOnline", "isAdmin", "isForbidden", "signupApplication", "ldap"},
-		RequestParameterSupported:              true,
-		RequestObjectSigningAlgValuesSupported: []string{"HS256", "HS384", "HS512"},
-		EndSessionEndpoint:                     fmt.Sprintf("%s/api/logout", originBackend),
+		Issuer:                                      issuer,
+		AuthorizationEndpoint:                       authzEndpoint,
+		TokenEndpoint:                               fmt.Sprintf("%s/api/login/oauth/access_token", originBackend),
+		UserinfoEndpoint:                            fmt.Sprintf("%s/api/userinfo", originBackend),
+		DeviceAuthorizationEndpoint:                 fmt.Sprintf("%s/api/device-auth", originBackend),
+		JwksUri:                                     jwksUri,
+		IntrospectionEndpoint:                       fmt.Sprintf("%s/api/login/oauth/introspect", originBackend),
+		RevocationEndpoint:                          fmt.Sprintf("%s/api/login/oauth/revoke", originBackend),
+		ResponseTypesSupported:                      []string{"code", "token", "id_token", "code token", "code id_token", "token id_token", "code token id_token", "none"},
+		ResponseModesSupported:                      []string{"query", "fragment", "form_post"},
+		GrantTypesSupported:                         []string{"password", "authorization_code", "refresh_token", "client_credentials"},
+		SubjectTypesSupported:                       []string{"public"},
+		IdTokenSigningAlgValuesSupported:            []string{"RS256", "RS512", "ES256", "ES384", "ES512"},
+		ScopesSupported:                             []string{"openid", "email", "profile", "address", "phone", "offline_access"},
+		ClaimsSupported:                             []string{"iss", "ver", "sub", "aud", "iat", "exp", "id", "type", "displayName", "avatar", "permanentAvatar", "email", "phone", "location", "affiliation", "title", "homepage", "bio", "tag", "region", "language", "score", "ranking", "isOnline", "isAdmin", "isForbidden", "signupApplication", "ldap"},
+		RequestParameterSupported:                   true,
+		RequestObjectSigningAlgValuesSupported:      []string{"HS256", "HS384", "HS512"},
+		EndSessionEndpoint:                          fmt.Sprintf("%s/api/logout", originBackend),
+		BackchannelLogoutSupported:                  true,
+		BackchannelLogoutSessionSupported:           true,
+		FrontchannelLogoutSupported:                 true,
+		FrontchannelLogoutSessionSupported:          true,
+		RevocationEndpointAuthMethodsSupported:      []string{"client_secret_post", "client_secret_basic"},
+		TokenEndpointAuthMethodsSupported:           []string{"client_secret_post", "client_secret_basic", "none"},
 	}
 
 	return oidcDiscovery

@@ -60,6 +60,8 @@ func initAPI() {
 	beego.Router("/api/acs", &controllers.ApiController{}, "POST:HandleSamlLogin")
 	beego.Router("/api/saml/metadata", &controllers.ApiController{}, "GET:GetSamlMeta")
 	beego.Router("/api/saml/redirect/:owner/:application", &controllers.ApiController{}, "*:HandleSamlRedirect")
+	beego.Router("/api/saml/logout/:owner/:application", &controllers.ApiController{}, "GET,POST:HandleSamlLogout")
+	beego.Router("/api/saml/logout/initiate/:owner/:application", &controllers.ApiController{}, "POST:InitiateSamlLogout")
 	beego.Router("/api/webhook", &controllers.ApiController{}, "*:HandleOfficialAccountEvent")
 	beego.Router("/api/get-qrcode", &controllers.ApiController{}, "GET:GetQRCode")
 	beego.Router("/api/get-webhook-event", &controllers.ApiController{}, "GET:GetWebhookEventType")
@@ -281,6 +283,7 @@ func initAPI() {
 	beego.Router("/api/login/oauth/access_token", &controllers.ApiController{}, "POST:GetOAuthToken")
 	beego.Router("/api/login/oauth/refresh_token", &controllers.ApiController{}, "POST:RefreshToken")
 	beego.Router("/api/login/oauth/introspect", &controllers.ApiController{}, "POST:IntrospectToken")
+	beego.Router("/api/login/oauth/revoke", &controllers.ApiController{}, "POST:RevokeToken")
 
 	beego.Router("/api/get-records", &controllers.ApiController{}, "GET:GetRecords")
 	beego.Router("/api/get-records-filter", &controllers.ApiController{}, "POST:GetRecordsByFilter")
@@ -312,6 +315,7 @@ func initAPI() {
 	beego.Router("/cas/:organization/:application/proxyValidate", &controllers.RootController{}, "GET:CasProxyValidate")
 	beego.Router("/cas/:organization/:application/proxy", &controllers.RootController{}, "GET:CasProxy")
 	beego.Router("/cas/:organization/:application/validate", &controllers.RootController{}, "GET:CasValidate")
+	beego.Router("/cas/:organization/:application/logout", &controllers.RootController{}, "GET,POST:CasLogout")
 
 	beego.Router("/cas/:organization/:application/p3/serviceValidate", &controllers.RootController{}, "GET:CasP3ServiceValidate")
 	beego.Router("/cas/:organization/:application/p3/proxyValidate", &controllers.RootController{}, "GET:CasP3ProxyValidate")
