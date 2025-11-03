@@ -134,6 +134,7 @@ func AddSession(session *Session) (bool, error) {
 
 		return affected != 0, nil
 	} else {
+		existingIds := append([]string{}, dbSession.SessionId...)
 		m := make(map[string]struct{})
 		for _, v := range dbSession.SessionId {
 			m[v] = struct{}{}
@@ -146,8 +147,24 @@ func AddSession(session *Session) (bool, error) {
 
 		removeExtraSessionIds(dbSession)
 
-		if session.ExclusiveSignin {
-			dbSession.SessionId = []string{session.SessionId[0]}
+		if session.ExclusiveSignin && len(session.SessionId) > 0 {
+			newSid := session.SessionId[0]
+			dbSession.SessionId = []string{newSid}
+			for _, sid := range existingIds {
+				if sid != newSid {
+					_ = DeleteSsoSessionsBySessionId(sid)
+				}
+			}
+		}
+
+		finalIds := make(map[string]struct{}, len(dbSession.SessionId))
+		for _, sid := range dbSession.SessionId {
+			finalIds[sid] = struct{}{}
+		}
+		for _, sid := range existingIds {
+			if _, ok := finalIds[sid]; !ok {
+				_ = DeleteSsoSessionsBySessionId(sid)
+			}
 		}
 
 		return UpdateSession(dbSession.GetId(), dbSession)
@@ -156,14 +173,20 @@ func AddSession(session *Session) (bool, error) {
 
 func DeleteSession(id string) (bool, error) {
 	owner, name, application := util.GetOwnerAndNameAndOtherFromId(id)
-	if owner == CasdoorOrganization && application == CasdoorApplication {
-		session, err := GetSingleSession(id)
-		if err != nil {
-			return false, err
-		}
+	session, err := GetSingleSession(id)
+	if err != nil {
+		return false, err
+	}
 
+	if owner == CasdoorOrganization && application == CasdoorApplication {
 		if session != nil {
 			DeleteBeegoSession(session.SessionId)
+		}
+	}
+
+	if session != nil {
+		for _, sid := range session.SessionId {
+			_ = DeleteSsoSessionsBySessionId(sid)
 		}
 	}
 
@@ -188,6 +211,8 @@ func DeleteSessionId(id string, sessionId string) (bool, error) {
 	if owner == CasdoorOrganization && application == CasdoorApplication {
 		DeleteBeegoSession([]string{sessionId})
 	}
+
+	_ = DeleteSsoSessionsBySessionId(sessionId)
 
 	session.SessionId = util.DeleteVal(session.SessionId, sessionId)
 	if len(session.SessionId) == 0 {

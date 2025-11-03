@@ -36,6 +36,7 @@ type Claims struct {
 	Provider string `json:"provider,omitempty"`
 
 	SigninMethod string `json:"signinMethod,omitempty"`
+	Sid          string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -160,6 +161,7 @@ type ClaimsShort struct {
 	Provider  string `json:"provider,omitempty"`
 
 	SigninMethod string `json:"signinMethod,omitempty"`
+	Sid          string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -182,6 +184,7 @@ type ClaimsWithoutThirdIdp struct {
 	Provider  string `json:"provider,omitempty"`
 
 	SigninMethod string `json:"signinMethod,omitempty"`
+	Sid          string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -315,6 +318,7 @@ func getShortClaims(claims Claims) ClaimsShort {
 		Azp:              claims.Azp,
 		SigninMethod:     claims.SigninMethod,
 		Provider:         claims.Provider,
+		Sid:              claims.Sid,
 	}
 	return res
 }
@@ -330,6 +334,7 @@ func getClaimsWithoutThirdIdp(claims Claims) ClaimsWithoutThirdIdp {
 		Azp:                 claims.Azp,
 		SigninMethod:        claims.SigninMethod,
 		Provider:            claims.Provider,
+		Sid:                 claims.Sid,
 	}
 	return res
 }
@@ -353,6 +358,7 @@ func getClaimsCustom(claims Claims, tokenField []string, tokenAttributes []*JwtI
 	res["azp"] = claims.Azp
 	res["signinMethod"] = claims.SigninMethod
 	res["provider"] = claims.Provider
+	res["sid"] = claims.Sid
 
 	for _, field := range tokenField {
 		if strings.HasPrefix(field, "Properties.") {
@@ -424,7 +430,7 @@ func refineUser(user *User) *User {
 	return user
 }
 
-func generateJwtToken(application *Application, user *User, provider string, signinMethod string, nonce string, scope string, host string) (string, string, string, error) {
+func generateJwtToken(application *Application, user *User, provider string, signinMethod string, nonce string, scope string, host string, sidOverride string) (string, string, string, string, error) {
 	nowTime := time.Now()
 	expireTime := nowTime.Add(time.Duration(application.ExpireInHours) * time.Hour)
 	refreshExpireTime := nowTime.Add(time.Duration(application.RefreshExpireInHours) * time.Hour)
@@ -435,7 +441,7 @@ func generateJwtToken(application *Application, user *User, provider string, sig
 	if conf.GetConfigBool("useGroupPathInToken") {
 		groupPath, err := user.GetUserFullGroupPath()
 		if err != nil {
-			return "", "", "", err
+			return "", "", "", "", err
 		}
 
 		user.Groups = groupPath
@@ -447,6 +453,11 @@ func generateJwtToken(application *Application, user *User, provider string, sig
 	name := util.GenerateId()
 	jti := util.GetId(application.Owner, name)
 
+	sid := sidOverride
+	if sid == "" {
+		sid = util.GenerateId()
+	}
+
 	claims := Claims{
 		User:      user,
 		TokenType: "access-token",
@@ -457,6 +468,7 @@ func generateJwtToken(application *Application, user *User, provider string, sig
 		Azp:          application.ClientId,
 		Provider:     provider,
 		SigninMethod: signinMethod,
+		Sid:          sid,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    originBackend,
 			Subject:   user.Id,
@@ -526,19 +538,19 @@ func generateJwtToken(application *Application, user *User, provider string, sig
 		claimsStandard.TokenType = "refresh-token"
 		refreshToken = jwt.NewWithClaims(jwtMethod, claimsStandard)
 	} else {
-		return "", "", "", fmt.Errorf("unknown application TokenFormat: %s", application.TokenFormat)
+		return "", "", "", "", fmt.Errorf("unknown application TokenFormat: %s", application.TokenFormat)
 	}
 
 	cert, err := getCertByApplication(application)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
 	if cert == nil {
 		if application.Cert == "" {
-			return "", "", "", fmt.Errorf("The cert field of the application \"%s\" should not be empty", application.GetId())
+			return "", "", "", "", fmt.Errorf("The cert field of the application \"%s\" should not be empty", application.GetId())
 		} else {
-			return "", "", "", fmt.Errorf("The cert \"%s\" does not exist", application.Cert)
+			return "", "", "", "", fmt.Errorf("The cert \"%s\" does not exist", application.Cert)
 		}
 	}
 
@@ -559,17 +571,17 @@ func generateJwtToken(application *Application, user *User, provider string, sig
 		key, err = jwt.ParseEdPrivateKeyFromPEM([]byte(cert.PrivateKey))
 	}
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
 	token.Header["kid"] = cert.Name
 	tokenString, err = token.SignedString(key)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	refreshTokenString, err = refreshToken.SignedString(key)
 
-	return tokenString, refreshTokenString, name, err
+	return tokenString, refreshTokenString, name, sid, err
 }
 
 func ParseJwtToken(token string, cert *Cert) (*Claims, error) {
@@ -616,4 +628,60 @@ func ParseJwtTokenByApplication(token string, application *Application) (*Claims
 	}
 
 	return ParseJwtToken(token, cert)
+}
+
+func signJwtWithApplication(application *Application, claims jwt.Claims) (string, error) {
+	signingMethod := application.TokenSigningMethod
+	if signingMethod == "" {
+		signingMethod = "RS256"
+	}
+
+	var jwtMethod jwt.SigningMethod
+	switch signingMethod {
+	case "RS256":
+		jwtMethod = jwt.SigningMethodRS256
+	case "RS512":
+		jwtMethod = jwt.SigningMethodRS512
+	case "ES256":
+		jwtMethod = jwt.SigningMethodES256
+	case "ES384":
+		jwtMethod = jwt.SigningMethodES384
+	case "ES512":
+		jwtMethod = jwt.SigningMethodES512
+	case "EdDSA", "Ed25519":
+		jwtMethod = jwt.SigningMethodEdDSA
+	default:
+		jwtMethod = jwt.SigningMethodRS256
+	}
+
+	token := jwt.NewWithClaims(jwtMethod, claims)
+
+	cert, err := getCertByApplication(application)
+	if err != nil {
+		return "", err
+	}
+	if cert == nil {
+		return "", fmt.Errorf("cert for application %s not found", application.GetId())
+	}
+	if cert.PrivateKey == "" {
+		return "", fmt.Errorf("private key for cert %s is empty", cert.Name)
+	}
+
+	var key interface{}
+	switch jwtMethod.Alg() {
+	case jwt.SigningMethodRS256.Alg(), jwt.SigningMethodRS512.Alg():
+		key, err = jwt.ParseRSAPrivateKeyFromPEM([]byte(cert.PrivateKey))
+	case jwt.SigningMethodES256.Alg(), jwt.SigningMethodES384.Alg(), jwt.SigningMethodES512.Alg():
+		key, err = jwt.ParseECPrivateKeyFromPEM([]byte(cert.PrivateKey))
+	case jwt.SigningMethodEdDSA.Alg():
+		key, err = jwt.ParseEdPrivateKeyFromPEM([]byte(cert.PrivateKey))
+	default:
+		key, err = jwt.ParseRSAPrivateKeyFromPEM([]byte(cert.PrivateKey))
+	}
+	if err != nil {
+		return "", err
+	}
+
+	token.Header["kid"] = cert.Name
+	return token.SignedString(key)
 }

@@ -37,6 +37,7 @@ type Token struct {
 	RefreshToken     string `xorm:"mediumtext" json:"refreshToken"`
 	AccessTokenHash  string `xorm:"varchar(100) index" json:"accessTokenHash"`
 	RefreshTokenHash string `xorm:"varchar(100) index" json:"refreshTokenHash"`
+	Sid              string `xorm:"varchar(128)" json:"sid"`
 	ExpiresIn        int    `json:"expiresIn"`
 	Scope            string `xorm:"varchar(100)" json:"scope"`
 	TokenType        string `xorm:"varchar(100)" json:"tokenType"`
@@ -93,6 +94,13 @@ func getTokenByCode(code string) (*Token, error) {
 	}
 
 	return nil, nil
+}
+
+// GetTokenByCode exposes the underlying lookup for authorization codes so
+// callers outside of the object package (e.g. controllers) can retrieve the
+// stored token metadata.
+func GetTokenByCode(code string) (*Token, error) {
+	return getTokenByCode(code)
 }
 
 func GetTokenByAccessToken(accessToken string) (*Token, error) {

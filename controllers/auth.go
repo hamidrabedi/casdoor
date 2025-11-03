@@ -55,6 +55,48 @@ func tokenToResponse(token *object.Token) *Response {
 	return &Response{Status: "ok", Msg: "", Data: token.AccessToken, Data2: token.RefreshToken}
 }
 
+func (c *ApiController) persistSsoSession(application *object.Application, user *object.User, session *object.SsoSession) {
+	if application == nil || user == nil || session == nil {
+		return
+	}
+
+	sessionId := session.SessionId
+	if sessionId == "" {
+		sessionId = c.Ctx.Input.CruSession.SessionID()
+	}
+	if sessionId == "" {
+		return
+	}
+
+	if session.Sid == "" && session.SessionIndex == "" && session.ServiceUrl == "" {
+		return
+	}
+
+	session.Owner = user.Owner
+	session.Name = user.Name
+	session.Application = application.GetId()
+	session.SessionId = sessionId
+	if session.ClientId == "" {
+		session.ClientId = application.ClientId
+	}
+
+	if session.FrontchannelLogoutUri == "" {
+		session.FrontchannelLogoutUri = application.FrontchannelLogoutUri
+		session.FrontchannelLogoutSessionRequired = application.FrontchannelLogoutSessionRequired
+	}
+	if session.BackchannelLogoutUri == "" {
+		session.BackchannelLogoutUri = application.BackchannelLogoutUri
+		session.BackchannelLogoutSessionRequired = application.BackchannelLogoutSessionRequired
+	}
+	if session.PostLogoutRedirectUri == "" && len(application.PostLogoutRedirectUris) > 0 {
+		session.PostLogoutRedirectUri = application.PostLogoutRedirectUris[0]
+	}
+
+	if _, err := object.AddOrUpdateSsoSession(session); err != nil {
+		util.LogWarning(c.Ctx, "SLO: failed to persist session for %s/%s/%s: %v", user.Owner, user.Name, application.Name, err)
+	}
+}
+
 // HandleLoggedIn ...
 func (c *ApiController) HandleLoggedIn(application *object.Application, user *object.User, form *form.AuthForm) (resp *Response) {
 	if user.IsForbidden {
@@ -171,6 +213,20 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 
 		resp = codeToResponse(code)
 		resp.Data3 = user.NeedUpdatePassword
+
+		if resp.Status == "ok" && code != nil && code.Code != "" {
+			tokenObj, err := object.GetTokenByCode(code.Code)
+			if err == nil && tokenObj != nil && tokenObj.Sid != "" {
+				protocol := "oauth2"
+				if strings.Contains(scope, "openid") {
+					protocol = "oidc"
+				}
+				c.persistSsoSession(application, user, &object.SsoSession{
+					Protocol: protocol,
+					Sid:      tokenObj.Sid,
+				})
+			}
+		}
 		if application.EnableSigninSession || application.HasPromptPage() {
 			// The prompt page needs the user to be signed in
 			c.SetSessionUsername(userId)
@@ -185,6 +241,16 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 			resp = tokenToResponse(token)
 
 			resp.Data3 = user.NeedUpdatePassword
+			if token != nil && token.Sid != "" {
+				protocol := "oauth2"
+				if strings.Contains(scope, "openid") {
+					protocol = "oidc"
+				}
+				c.persistSsoSession(application, user, &object.SsoSession{
+					Protocol: protocol,
+					Sid:      token.Sid,
+				})
+			}
 		}
 	} else if form.Type == ResponseTypeDevice {
 		authCache, ok := object.DeviceAuthMap.LoadAndDelete(form.UserCode)
@@ -213,12 +279,21 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 
 		resp = &Response{Status: "ok", Msg: "", Data: userId, Data3: user.NeedUpdatePassword}
 	} else if form.Type == ResponseTypeSaml { // saml flow
-		res, redirectUrl, method, err := object.GetSamlResponse(application, user, form.SamlRequest, c.Ctx.Request.Host)
+		res, redirectUrl, method, sessionIndex, nameId, err := object.GetSamlResponse(application, user, form.SamlRequest, c.Ctx.Request.Host)
 		if err != nil {
 			c.ResponseError(err.Error(), nil)
 			return
 		}
 		resp = &Response{Status: "ok", Msg: "", Data: res, Data2: map[string]interface{}{"redirectUrl": redirectUrl, "method": method}, Data3: user.NeedUpdatePassword}
+
+		if sessionIndex != "" {
+			c.persistSsoSession(application, user, &object.SsoSession{
+				Protocol:     "saml",
+				SessionIndex: sessionIndex,
+				NameId:       nameId,
+				RelayState:   c.Input().Get("RelayState"),
+			})
+		}
 
 		if application.EnableSigninSession || application.HasPromptPage() {
 			// The prompt page needs the user to be signed in
@@ -234,6 +309,11 @@ func (c *ApiController) HandleLoggedIn(application *object.Application, user *ob
 				resp = wrapErrorResponse(err)
 			} else {
 				resp.Data = st
+				c.persistSsoSession(application, user, &object.SsoSession{
+					Protocol:     "cas",
+					SessionIndex: st,
+					ServiceUrl:   service,
+				})
 			}
 		}
 

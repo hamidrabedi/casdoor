@@ -96,6 +96,14 @@ type Application struct {
 	EnableLinkWithEmail   bool            `json:"enableLinkWithEmail"`
 	OrgChoiceMode         string          `json:"orgChoiceMode"`
 	SamlReplyUrl          string          `xorm:"varchar(500)" json:"samlReplyUrl"`
+	PostLogoutRedirectUris         []string `xorm:"varchar(1000)" json:"postLogoutRedirectUris"`
+	FrontchannelLogoutUri          string   `xorm:"varchar(512)" json:"frontchannelLogoutUri"`
+	FrontchannelLogoutSessionRequired bool  `json:"frontchannelLogoutSessionRequired"`
+	BackchannelLogoutUri           string   `xorm:"varchar(512)" json:"backchannelLogoutUri"`
+	BackchannelLogoutSessionRequired bool  `json:"backchannelLogoutSessionRequired"`
+	SamlSingleLogoutServiceUrl     string   `xorm:"varchar(512)" json:"samlSingleLogoutServiceUrl"`
+	SamlSingleLogoutServiceBinding string   `xorm:"varchar(128)" json:"samlSingleLogoutServiceBinding"`
+	CasSingleLogoutCallback        string   `xorm:"varchar(512)" json:"casSingleLogoutCallback"`
 	Providers             []*ProviderItem `xorm:"mediumtext" json:"providers"`
 	SigninMethods         []*SigninMethod `xorm:"varchar(2000)" json:"signinMethods"`
 	SignupItems           []*SignupItem   `xorm:"varchar(3000)" json:"signupItems"`
@@ -560,6 +568,14 @@ func GetMaskedApplication(application *Application, userId string) *Application 
 	application.EnableWebAuthn = false
 	application.EnableLinkWithEmail = false
 	application.SamlReplyUrl = "***"
+	application.PostLogoutRedirectUris = nil
+	application.FrontchannelLogoutUri = ""
+	application.BackchannelLogoutUri = ""
+	application.FrontchannelLogoutSessionRequired = false
+	application.BackchannelLogoutSessionRequired = false
+	application.SamlSingleLogoutServiceUrl = ""
+	application.SamlSingleLogoutServiceBinding = ""
+	application.CasSingleLogoutCallback = ""
 
 	providerItems := []*ProviderItem{}
 	for _, providerItem := range application.Providers {

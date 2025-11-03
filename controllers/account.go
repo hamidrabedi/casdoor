@@ -17,11 +17,14 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/casdoor/casdoor/form"
 	"github.com/casdoor/casdoor/object"
+	"github.com/casdoor/casdoor/proxy"
 	"github.com/casdoor/casdoor/util"
 )
 
@@ -58,6 +61,117 @@ type Captcha struct {
 	ClientId2     string `json:"clientId2"`
 	ClientSecret2 string `json:"clientSecret2"`
 	SubType       string `json:"subType"`
+}
+
+func (c *ApiController) triggerSloSessions(sessions []*object.SsoSession) []string {
+	frontUrls := []string{}
+	if len(sessions) == 0 {
+		return frontUrls
+	}
+
+	host := c.Ctx.Request.Host
+	appCache := map[string]*object.Application{}
+
+	for _, session := range sessions {
+		if session == nil {
+			continue
+		}
+
+		appId := session.Application
+		app, ok := appCache[appId]
+		if !ok {
+			var err error
+			app, err = object.GetApplication(appId)
+			if err != nil || app == nil {
+				util.LogWarning(c.Ctx, "SLO: failed to load application %s: %v", appId, err)
+				continue
+			}
+			appCache[appId] = app
+		}
+
+		switch strings.ToLower(session.Protocol) {
+		case "oidc", "oauth", "oauth2", "":
+			if session.BackchannelLogoutUri != "" {
+				token, err := object.GenerateBackchannelLogoutToken(app, session, host, "")
+				if err != nil {
+					util.LogWarning(c.Ctx, "SLO: failed to build backchannel logout token for %s: %v", appId, err)
+				} else {
+					values := url.Values{}
+					values.Set("logout_token", token)
+					req, err := http.NewRequest(http.MethodPost, session.BackchannelLogoutUri, strings.NewReader(values.Encode()))
+					if err == nil {
+						req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+						req.Header.Set("User-Agent", "Casdoor-SLO/1.0")
+						resp, err := proxy.DefaultHttpClient.Do(req)
+						if err != nil {
+							util.LogWarning(c.Ctx, "SLO: backchannel request to %s failed: %v", session.BackchannelLogoutUri, err)
+						} else {
+							io.Copy(io.Discard, resp.Body)
+							resp.Body.Close()
+						}
+					} else {
+						util.LogWarning(c.Ctx, "SLO: failed to create backchannel request for %s: %v", session.BackchannelLogoutUri, err)
+					}
+				}
+			}
+			if url, err := object.BuildFrontchannelLogoutURL(app, session, host); err == nil && url != "" {
+				frontUrls = append(frontUrls, url)
+			} else if err != nil {
+				util.LogWarning(c.Ctx, "SLO: failed to build frontchannel url for %s: %v", appId, err)
+			}
+		case "saml":
+			endpoint, payload, err := object.GenerateSamlLogoutRequest(app, session, host)
+			if err != nil {
+				util.LogWarning(c.Ctx, "SLO: failed to generate saml logout request for %s: %v", appId, err)
+				continue
+			}
+			values := url.Values{}
+			values.Set("SAMLRequest", payload)
+			if session.RelayState != "" {
+				values.Set("RelayState", session.RelayState)
+			}
+			req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(values.Encode()))
+			if err != nil {
+				util.LogWarning(c.Ctx, "SLO: failed to prepare saml logout request for %s: %v", endpoint, err)
+				continue
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("User-Agent", "Casdoor-SLO/1.0")
+			resp, err := proxy.DefaultHttpClient.Do(req)
+			if err != nil {
+				util.LogWarning(c.Ctx, "SLO: saml logout request to %s failed: %v", endpoint, err)
+				continue
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		case "cas":
+			endpoint, body, err := object.GenerateCasLogoutRequest(session)
+			if err != nil {
+				util.LogWarning(c.Ctx, "SLO: failed to generate cas logout request: %v", err)
+				continue
+			}
+			values := url.Values{}
+			values.Set("logoutRequest", body)
+			req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(values.Encode()))
+			if err != nil {
+				util.LogWarning(c.Ctx, "SLO: failed to prepare cas logout request: %v", err)
+				continue
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("User-Agent", "Casdoor-SLO/1.0")
+			resp, err := proxy.DefaultHttpClient.Do(req)
+			if err != nil {
+				util.LogWarning(c.Ctx, "SLO: cas logout request to %s failed: %v", endpoint, err)
+				continue
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		default:
+			util.LogWarning(c.Ctx, "SLO: unsupported protocol %s", session.Protocol)
+		}
+	}
+
+	return frontUrls
 }
 
 // this API is used by "Api URL" of Flarum's FoF Passport plugin
@@ -333,12 +447,37 @@ func (c *ApiController) Logout() {
 	state := c.GetString("state")
 
 	user := c.GetSessionUsername()
+	sessionId := c.Ctx.Input.CruSession.SessionID()
+	sloSessionMap := map[string]*object.SsoSession{}
+	if sessionId != "" {
+		if candidates, err := object.GetSsoSessionsBySessionId(sessionId); err == nil {
+			for _, sess := range candidates {
+				if sess != nil {
+					sloSessionMap[sess.GetId()] = sess
+				}
+			}
+		} else {
+			util.LogWarning(c.Ctx, "SLO: failed to load sessions for %s: %v", sessionId, err)
+		}
+	}
+	frontChannelUrls := []string{}
 
 	if accessToken == "" && redirectUri == "" {
 		// TODO https://github.com/casdoor/casdoor/pull/1494#discussion_r1095675265
 		if user == "" {
 			c.ResponseOk()
 			return
+		}
+
+		sessions := make([]*object.SsoSession, 0, len(sloSessionMap))
+		for _, sess := range sloSessionMap {
+			sessions = append(sessions, sess)
+		}
+		if len(sessions) > 0 {
+			frontChannelUrls = append(frontChannelUrls, c.triggerSloSessions(sessions)...)
+			for _, sess := range sessions {
+				_, _ = object.DeleteSsoSession(sess)
+			}
 		}
 
 		c.ClearUserSession()
@@ -353,11 +492,15 @@ func (c *ApiController) Logout() {
 		util.LogInfo(c.Ctx, "API: [%s] logged out", user)
 
 		application := c.GetSessionApplication()
-		if application == nil || application.Name == "app-built-in" || application.HomepageUrl == "" {
-			c.ResponseOk(user)
-			return
+		resp := &Response{Status: "ok", Data: user}
+		if application != nil && application.Name != "app-built-in" && application.HomepageUrl != "" {
+			resp.Data2 = application.HomepageUrl
 		}
-		c.ResponseOk(user, application.HomepageUrl)
+		if len(frontChannelUrls) > 0 {
+			resp.Data3 = map[string]interface{}{"frontChannelLogoutUrls": frontChannelUrls}
+		}
+		c.Data["json"] = resp
+		c.ServeJSON()
 		return
 	} else {
 		// "post_logout_redirect_uri" has been made optional, see: https://github.com/casdoor/casdoor/issues/2151
@@ -388,6 +531,27 @@ func (c *ApiController) Logout() {
 			user = util.GetId(token.Organization, token.User)
 		}
 
+		if additional, err := object.GetSsoSessionsByUserAndApp(token.Organization, token.User, util.GetId(application.Owner, application.Name)); err == nil {
+			for _, sess := range additional {
+				if sess != nil {
+					sloSessionMap[sess.GetId()] = sess
+				}
+			}
+		} else {
+			util.LogWarning(c.Ctx, "SLO: failed to load sessions for %s/%s: %v", token.Organization, token.User, err)
+		}
+
+		sessions := make([]*object.SsoSession, 0, len(sloSessionMap))
+		for _, sess := range sloSessionMap {
+			sessions = append(sessions, sess)
+		}
+		if len(sessions) > 0 {
+			frontChannelUrls = append(frontChannelUrls, c.triggerSloSessions(sessions)...)
+			for _, sess := range sessions {
+				_, _ = object.DeleteSsoSession(sess)
+			}
+		}
+
 		c.ClearUserSession()
 		c.ClearTokenSession()
 		// TODO https://github.com/casdoor/casdoor/pull/1494#discussion_r1095675265
@@ -402,7 +566,12 @@ func (c *ApiController) Logout() {
 		util.LogInfo(c.Ctx, "API: [%s] logged out", user)
 
 		if redirectUri == "" {
-			c.ResponseOk()
+			resp := &Response{Status: "ok"}
+			if len(frontChannelUrls) > 0 {
+				resp.Data3 = map[string]interface{}{"frontChannelLogoutUrls": frontChannelUrls}
+			}
+			c.Data["json"] = resp
+			c.ServeJSON()
 			return
 		} else {
 			if application.IsRedirectUriValid(redirectUri) {

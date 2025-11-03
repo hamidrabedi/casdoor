@@ -32,6 +32,27 @@ class CasLogout extends React.Component {
     }
   }
 
+  triggerFrontchannel(logoutRes) {
+    const urls = logoutRes?.data3?.frontChannelLogoutUrls;
+    if (!Array.isArray(urls) || urls.length === 0) {
+      return;
+    }
+    urls.forEach((url) => {
+      if (!url) {
+        return;
+      }
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      setTimeout(() => {
+        if (iframe.parentNode) {
+          iframe.parentNode.removeChild(iframe);
+        }
+      }, 5000);
+    });
+  }
+
   UNSAFE_componentWillMount() {
     const params = new URLSearchParams(this.props.location.search);
     const logoutInterval = 100;
@@ -42,6 +63,7 @@ class CasLogout extends React.Component {
           if (accountRes.status === "ok") {
             AuthBackend.logout().then((logoutRes) => {
               if (logoutRes.status === "ok") {
+                this.triggerFrontchannel(logoutRes);
                 logoutTimeOut(logoutRes.data2);
               } else {
                 Setting.showMessage("error", `${i18next.t("login:Failed to log out")}: ${logoutRes.msg}`);
@@ -65,6 +87,7 @@ class CasLogout extends React.Component {
     AuthBackend.logout()
       .then((res) => {
         if (res.status === "ok") {
+          this.triggerFrontchannel(res);
           logoutTimeOut(res.data2);
         } else {
           Setting.showMessage("error", `${i18next.t("login:Failed to log out")}: ${res.msg}`);

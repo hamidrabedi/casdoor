@@ -44,6 +44,11 @@ type OidcDiscovery struct {
 	RequestParameterSupported              bool     `json:"request_parameter_supported"`
 	RequestObjectSigningAlgValuesSupported []string `json:"request_object_signing_alg_values_supported"`
 	EndSessionEndpoint                     string   `json:"end_session_endpoint"`
+	FrontchannelLogoutSupported            bool     `json:"frontchannel_logout_supported"`
+	FrontchannelLogoutSessionSupported     bool     `json:"frontchannel_logout_session_supported"`
+	BackchannelLogoutSupported             bool     `json:"backchannel_logout_supported"`
+	BackchannelLogoutSessionSupported      bool     `json:"backchannel_logout_session_supported"`
+	BackchannelLogoutSessionRequired       bool     `json:"backchannel_logout_session_required"`
 }
 
 type WebFinger struct {
@@ -148,6 +153,11 @@ func GetOidcDiscovery(host string, applicationName string) OidcDiscovery {
 		RequestParameterSupported:              true,
 		RequestObjectSigningAlgValuesSupported: []string{"HS256", "HS384", "HS512"},
 		EndSessionEndpoint:                     fmt.Sprintf("%s/api/logout", originBackend),
+		FrontchannelLogoutSupported:            true,
+		FrontchannelLogoutSessionSupported:     true,
+		BackchannelLogoutSupported:             true,
+		BackchannelLogoutSessionSupported:      true,
+		BackchannelLogoutSessionRequired:       false,
 	}
 
 	return oidcDiscovery

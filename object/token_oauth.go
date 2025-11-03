@@ -171,7 +171,7 @@ func GetOAuthCode(userId string, clientId string, provider string, signinMethod 
 	if err != nil {
 		return nil, err
 	}
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, provider, signinMethod, nonce, scope, host)
+	accessToken, refreshToken, tokenName, sid, err := generateJwtToken(application, user, provider, signinMethod, nonce, scope, host, "")
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +196,7 @@ func GetOAuthCode(userId string, clientId string, provider string, signinMethod 
 		CodeChallenge: challenge,
 		CodeIsUsed:    false,
 		CodeExpireIn:  time.Now().Add(time.Minute * 5).Unix(),
+		Sid:           sid,
 	}
 	_, err = AddToken(token)
 	if err != nil {
@@ -379,7 +380,7 @@ func RefreshToken(grantType string, refreshToken string, scope string, clientId 
 		return nil, err
 	}
 
-	newAccessToken, newRefreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, host)
+	newAccessToken, newRefreshToken, tokenName, sid, err := generateJwtToken(application, user, "", "", "", scope, host, token.Sid)
 	if err != nil {
 		return &TokenError{
 			Error:            EndpointError,
@@ -400,6 +401,7 @@ func RefreshToken(grantType string, refreshToken string, scope string, clientId 
 		ExpiresIn:    application.ExpireInHours * hourSeconds,
 		Scope:        scope,
 		TokenType:    "Bearer",
+		Sid:          sid,
 	}
 	_, err = AddToken(newToken)
 	if err != nil {
@@ -565,7 +567,7 @@ func GetPasswordToken(application *Application, username string, password string
 		return nil, nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", scope, host)
+	accessToken, refreshToken, tokenName, sid, err := generateJwtToken(application, user, "", "", "", scope, host, "")
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -585,6 +587,7 @@ func GetPasswordToken(application *Application, username string, password string
 		ExpiresIn:    application.ExpireInHours * hourSeconds,
 		Scope:        scope,
 		TokenType:    "Bearer",
+		Sid:          sid,
 		CodeIsUsed:   true,
 	}
 	_, err = AddToken(token)
@@ -611,7 +614,7 @@ func GetClientCredentialsToken(application *Application, clientSecret string, sc
 		Type:  "application",
 	}
 
-	accessToken, _, tokenName, err := generateJwtToken(application, nullUser, "", "", "", scope, host)
+	accessToken, _, tokenName, _, err := generateJwtToken(application, nullUser, "", "", "", scope, host, "")
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -675,7 +678,7 @@ func GetTokenByUser(application *Application, user *User, scope string, nonce st
 		return nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", nonce, scope, host)
+	accessToken, refreshToken, tokenName, sid, err := generateJwtToken(application, user, "", "", nonce, scope, host, "")
 	if err != nil {
 		return nil, err
 	}
@@ -694,6 +697,7 @@ func GetTokenByUser(application *Application, user *User, scope string, nonce st
 		Scope:        scope,
 		TokenType:    "Bearer",
 		CodeIsUsed:   true,
+		Sid:          sid,
 	}
 	_, err = AddToken(token)
 	if err != nil {
@@ -782,7 +786,7 @@ func GetWechatMiniProgramToken(application *Application, code string, host strin
 		return nil, nil, err
 	}
 
-	accessToken, refreshToken, tokenName, err := generateJwtToken(application, user, "", "", "", "", host)
+	accessToken, refreshToken, tokenName, sid, err := generateJwtToken(application, user, "", "", "", "", host, "")
 	if err != nil {
 		return nil, &TokenError{
 			Error:            EndpointError,
@@ -803,6 +807,7 @@ func GetWechatMiniProgramToken(application *Application, code string, host strin
 		ExpiresIn:    application.ExpireInHours * hourSeconds,
 		Scope:        "",
 		TokenType:    "Bearer",
+		Sid:          sid,
 		CodeIsUsed:   true,
 	}
 	_, err = AddToken(token)
