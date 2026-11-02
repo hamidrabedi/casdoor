@@ -526,6 +526,46 @@ func (c *ApiController) DeleteUser() {
 	c.ServeJSON()
 }
 
+// LogoutUser
+// @Title LogoutUser
+// @Tag User API
+// @Description end all sessions of a user and revoke its tokens, the OIDC and SAML applications it signed in to are told. Only for an admin of the user's organization
+// @Param   body    body   object.User  true        "The owner and name of the user"
+// @Success 200 {object} controllers.Response The Response object
+// @router /logout-user [post]
+func (c *ApiController) LogoutUser() {
+	var request object.User
+	err := json.Unmarshal(c.Ctx.Input.RequestBody, &request)
+	if err != nil {
+		c.ResponseError(err.Error())
+		return
+	}
+
+	id := util.GetId(request.Owner, request.Name)
+	user, err := object.GetUser(id)
+	if err != nil {
+		c.ResponseError(err.Error())
+		return
+	}
+	if user == nil {
+		c.ResponseError(fmt.Sprintf(c.T("general:The user: %s doesn't exist"), id))
+		return
+	}
+
+	if !c.IsAdminOf(user) {
+		c.ResponseError(c.T("auth:Unauthorized operation"))
+		return
+	}
+
+	err = object.TerminateUserAccess(user, c.Ctx.Request.Host)
+	if err != nil {
+		c.ResponseError(err.Error())
+		return
+	}
+
+	c.ResponseOk()
+}
+
 // GetEmailAndPhone
 // @Title GetEmailAndPhone
 // @Tag User API

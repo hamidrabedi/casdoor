@@ -95,6 +95,7 @@ func InitAPI() {
 	web.Router("/api/update-user", &controllers.ApiController{}, "POST:UpdateUser")
 	web.Router("/api/add-user", &controllers.ApiController{}, "POST:AddUser")
 	web.Router("/api/delete-user", &controllers.ApiController{}, "POST:DeleteUser")
+	web.Router("/api/logout-user", &controllers.ApiController{}, "POST:LogoutUser")
 	web.Router("/api/upload-users", &controllers.ApiController{}, "POST:UploadUsers")
 	web.Router("/api/remove-user-from-group", &controllers.ApiController{}, "POST:RemoveUserFromGroup")
 	web.Router("/api/verify-identification", &controllers.ApiController{}, "POST:VerifyIdentification")
