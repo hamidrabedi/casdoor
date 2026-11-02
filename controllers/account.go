@@ -443,9 +443,10 @@ func (c *ApiController) Logout() {
 		// replaces CruSession's id, so reading it afterwards would miss the id stored in the DB.
 		beegoSessionId := c.Ctx.Input.CruSession.SessionID(context.Background())
 
-		// Sent before deleteUserSession(), which expires the tokens that SendBackchannelLogout() looks up
+		// Sent before deleteUserSession(), which expires the tokens that the notification looks up.
+		// The other sessions of the user stay signed in, so their applications are not told.
 		bcOwner, bcUsername := util.GetOwnerAndNameFromIdNoCheck(user)
-		object.SendBackchannelLogout(bcOwner, bcUsername, "", c.Ctx.Request.Host)
+		object.SendBackchannelLogoutForSession(bcOwner, bcUsername, beegoSessionId, c.Ctx.Request.Host)
 		object.SendSamlLogout(bcOwner, bcUsername, []string{beegoSessionId}, c.Ctx.Request.Host)
 
 		c.ClearUserSession()
@@ -510,27 +511,38 @@ func (c *ApiController) Logout() {
 			c.Ctx.Input.SetParam("recordUserId", user)
 		}
 
-		// Sent before the tokens are expired, SendBackchannelLogout() only sees active ones
-		object.SendBackchannelLogout(token.Organization, token.User, "", c.Ctx.Request.Host)
-
-		_, err = object.ExpireToken(token)
-		if err != nil {
-			c.ResponseError(err.Error())
-			return
-		}
-
 		// Capture the Beego session id before ClearUserSession(): SessionRegenerateID()
 		// replaces CruSession's id, so reading it afterwards would miss the id stored in the DB.
 		beegoSessionId := c.Ctx.Input.CruSession.SessionID(context.Background())
 
-		samlOwner, samlUsername := util.GetOwnerAndNameFromIdNoCheck(user)
-		object.SendSamlLogout(samlOwner, samlUsername, []string{beegoSessionId}, c.Ctx.Request.Host)
+		// Sent before the tokens are expired, the notifications only see active ones
+		sessionOwner, sessionUsername := util.GetOwnerAndNameFromIdNoCheck(user)
+		object.SendBackchannelLogoutForSession(sessionOwner, sessionUsername, beegoSessionId, c.Ctx.Request.Host)
+		object.SendSamlLogout(sessionOwner, sessionUsername, []string{beegoSessionId}, c.Ctx.Request.Host)
 
 		c.ClearUserSession()
 		c.ClearTokenSession()
 
 		// TODO https://github.com/casdoor/casdoor/pull/1494#discussion_r1095675265
 		if err := c.deleteUserSession(user, beegoSessionId); err != nil {
+			c.ResponseError(err.Error())
+			return
+		}
+
+		// The hint decides the session to end, the request may come without the session cookie or
+		// from another browser. A token that is not tied to a session can only tell its application.
+		if token.SessionId == "" {
+			object.SendBackchannelLogoutForToken(token, c.Ctx.Request.Host)
+		} else if token.SessionId != beegoSessionId {
+			_, err = object.TerminateUserSession(token.Organization, token.User, token.SessionId, c.Ctx.Request.Host)
+			if err != nil {
+				c.ResponseError(err.Error())
+				return
+			}
+		}
+
+		_, err = object.ExpireToken(token)
+		if err != nil {
 			c.ResponseError(err.Error())
 			return
 		}
@@ -616,11 +628,11 @@ func (c *ApiController) SsoLogout() {
 	}
 
 	// Send OIDC Back-Channel Logout notifications BEFORE expiring tokens,
-	// because SendBackchannelLogout calls GetActiveTokensByUser (expires_in > 0).
-	object.SendBackchannelLogout(owner, username, currentSessionId, c.Ctx.Request.Host)
-
+	// because they call GetActiveTokensByUser (expires_in > 0).
 	if logoutAllSessions {
-		// Logout from all sessions: expire all tokens and delete all sessions
+		// Logout from all sessions: expire all tokens and delete all sessions. The logout token
+		// has no "sid", which tells the application that all sessions of the user have ended.
+		object.SendBackchannelLogout(owner, username, "", c.Ctx.Request.Host)
 		object.SendSamlLogout(owner, username, nil, c.Ctx.Request.Host)
 
 		_, err = object.ExpireTokenByUser(owner, username)
@@ -651,6 +663,7 @@ func (c *ApiController) SsoLogout() {
 	} else {
 		// Logout from current session only
 		sessionIds = []string{currentSessionId}
+		object.SendBackchannelLogoutForSession(owner, username, currentSessionId, c.Ctx.Request.Host)
 		object.SendSamlLogout(owner, username, sessionIds, c.Ctx.Request.Host)
 
 		// Only delete the current session's Beego session
