@@ -34,6 +34,9 @@ type OidcIdTokenClaims struct {
 	AuthTime *jwt.NumericDate `json:"auth_time,omitempty"`
 	AtHash   string           `json:"at_hash,omitempty"`
 	CHash    string           `json:"c_hash,omitempty"`
+	// Sid identifies the Casdoor session, it is the value of the "sid" claim of the back-channel
+	// logout tokens, see https://openid.net/specs/openid-connect-backchannel-1_0.html#Claims
+	Sid string `json:"sid,omitempty"`
 }
 
 type Claims struct {
@@ -438,6 +441,9 @@ func getClaimsCustom(claims Claims, tokenField []string, tokenAttributes []*JwtI
 	if claims.CHash != "" {
 		res["c_hash"] = claims.CHash
 	}
+	if claims.Sid != "" {
+		res["sid"] = claims.Sid
+	}
 
 	// Always include azp if present (authorized party)
 	if claims.Azp != "" {
@@ -608,6 +614,8 @@ type jwtTokenOptions struct {
 	WithAtHash bool
 	// RefreshScope is the scope of the grant when a refresh asks for a narrower access token
 	RefreshScope string
+	// SessionId is the Casdoor session the token is issued under, empty if there is none
+	SessionId string
 }
 
 // getOidcHash returns the left-most half of the hash of value, base64url encoded, using the hash
@@ -687,6 +695,9 @@ func generateJwtTokenWithOptions(application *Application, user *User, provider 
 	idClaims := claims
 	idClaims.TokenType = "id-token"
 	idClaims.ID = util.GetId(application.Owner, util.GenerateId())
+	if options.SessionId != "" {
+		idClaims.Sid = GetSessionIdHash(options.SessionId)
+	}
 
 	// RFC 8707: Use resource as audience when provided
 	if resource != "" {

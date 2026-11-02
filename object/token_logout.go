@@ -55,8 +55,9 @@ func generateLogoutToken(application *Application, user *User, sessionId string,
 		},
 	}
 
+	// The same value as the "sid" claim of the ID token, the raw id is the session cookie itself
 	if sessionId != "" {
-		claims.Sid = sessionId
+		claims.Sid = GetSessionIdHash(sessionId)
 	}
 
 	cert, err := getCertByApplication(application)
