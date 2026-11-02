@@ -156,12 +156,7 @@ func logoutUserSession(user *User, sessionId string, host string) error {
 		return err
 	}
 
-	sessionTokens := []*Token{}
-	for _, token := range tokens {
-		if token.SessionId == sessionId {
-			sessionTokens = append(sessionTokens, token)
-		}
-	}
+	sessionTokens := filterTokensBySessionId(tokens, sessionId)
 
 	sendBackchannelLogoutForTokens(user, sessionTokens, sessionId, host)
 	SendSamlLogout(user.Owner, user.Name, []string{sessionId}, host)

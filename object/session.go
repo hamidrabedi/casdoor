@@ -377,6 +377,57 @@ func DeleteUserSessionId(owner string, name string, beegoSessionId string) error
 	return nil
 }
 
+// TerminateUserSession ends one session of the user, given by its id or by the hash that the session
+// APIs and the "sid" claim expose, and tells the OIDC and SAML applications signed in with it. It
+// returns false when the user has no such session.
+func TerminateUserSession(owner string, name string, sessionId string, host string) (bool, error) {
+	sessionId, err := resolveUserSessionId(owner, name, sessionId)
+	if err != nil || sessionId == "" {
+		return false, err
+	}
+
+	user, err := GetUser(util.GetId(owner, name))
+	if err != nil {
+		return false, err
+	}
+	if user == nil {
+		// A session left behind by a removed user, there is no one to log out of the applications
+		return true, DeleteUserSessionId(owner, name, sessionId)
+	}
+
+	return true, logoutUserSession(user, sessionId, host)
+}
+
+func resolveUserSessionId(owner string, name string, sessionId string) (string, error) {
+	if sessionId == "" {
+		return "", nil
+	}
+
+	sessions, err := GetUserSessions(owner, name)
+	if err != nil {
+		return "", err
+	}
+	for _, session := range sessions {
+		id := resolveSessionId(session, sessionId)
+		if id != "" {
+			return id, nil
+		}
+	}
+
+	// No Session row holds the id when the login happened without one (e.g. "app-built-in" sign-in)
+	tokens, err := GetActiveTokensByUser(owner, name)
+	if err != nil {
+		return "", err
+	}
+	for _, token := range tokens {
+		if token.SessionId != "" && (token.SessionId == sessionId || GetSessionIdHash(token.SessionId) == sessionId) {
+			return token.SessionId, nil
+		}
+	}
+
+	return "", nil
+}
+
 // EnforceBrowserSessionLimit keeps the current Beego session id of the user plus the limit-1 most
 // recently active other live ones across all applications, and drops the rest together with the
 // tokens minted under them. An SSO sign-in into another application reuses the same id, so it is
@@ -409,13 +460,7 @@ func EnforceBrowserSessionLimit(user *User, currentSessionId string, limit int, 
 		}
 	}
 	for _, oldId := range oldIds {
-		sessionTokens := []*Token{}
-		for _, token := range oldTokens {
-			if token.SessionId == oldId {
-				sessionTokens = append(sessionTokens, token)
-			}
-		}
-		sendBackchannelLogoutForTokens(user, sessionTokens, oldId, host)
+		sendBackchannelLogoutForTokens(user, filterTokensBySessionId(oldTokens, oldId), oldId, host)
 	}
 	SendSamlLogout(user.Owner, user.Name, oldIds, host)
 

@@ -100,6 +100,41 @@ func SendBackchannelLogout(organization, username, sessionId, host string) {
 	sendBackchannelLogoutForTokens(user, tokens, sessionId, host)
 }
 
+// SendBackchannelLogoutForSession is SendBackchannelLogout for a single session: only the applications
+// signed in with this session are told, and the token says which session has ended.
+func SendBackchannelLogoutForSession(organization, username, sessionId, host string) {
+	if sessionId == "" {
+		return
+	}
+
+	tokens, err := GetActiveTokensByUser(organization, username)
+	if err != nil {
+		return
+	}
+
+	sessionTokens := filterTokensBySessionId(tokens, sessionId)
+	if len(sessionTokens) == 0 {
+		return
+	}
+
+	user, err := GetUser(util.GetId(organization, username))
+	if err != nil || user == nil {
+		return
+	}
+
+	sendBackchannelLogoutForTokens(user, sessionTokens, sessionId, host)
+}
+
+// SendBackchannelLogoutForToken tells the application of a token that is not tied to any session
+func SendBackchannelLogoutForToken(token *Token, host string) {
+	user, err := GetUser(util.GetId(token.Organization, token.User))
+	if err != nil || user == nil {
+		return
+	}
+
+	sendBackchannelLogoutForTokens(user, []*Token{token}, "", host)
+}
+
 // sendBackchannelLogoutForTokens is the body of SendBackchannelLogout for callers that already
 // hold the user and its active tokens, so that the token table is not queried a second time
 func sendBackchannelLogoutForTokens(user *User, tokens []*Token, sessionId string, host string) {
@@ -124,6 +159,16 @@ func sendBackchannelLogoutForTokens(user *User, tokens []*Token, sessionId strin
 
 		go postLogoutForm(application, application.BackchannelLogoutUri, url.Values{"logout_token": {logoutToken}})
 	}
+}
+
+func filterTokensBySessionId(tokens []*Token, sessionId string) []*Token {
+	sessionTokens := []*Token{}
+	for _, token := range tokens {
+		if token.SessionId == sessionId {
+			sessionTokens = append(sessionTokens, token)
+		}
+	}
+	return sessionTokens
 }
 
 func postLogoutForm(application *Application, logoutUrl string, form url.Values) {
